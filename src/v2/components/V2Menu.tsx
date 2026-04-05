@@ -193,7 +193,7 @@ export const ContextPanel: React.FC<ContextPanelProps> = ({ selection, onUpdateC
                   </div>
                   <div className="flex items-center gap-2">
                     <input 
-                      type="range" min="0.001" max="0.999" step="0.001"
+                      type="range" min="0" max="1" step="0.01"
                       value={selection.data?.u || 0} 
                       onChange={(e) => onUpdateConnector?.(selection.id!, { u: Number(e.target.value) })}
                       className="w-full h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-emerald-500"

@@ -15,7 +15,7 @@ export const V2Header: React.FC<V2HeaderProps> = ({
   undo 
 }) => {
   return (
-    <header className="bg-white border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 px-4 py-2 z-30 shrink-0">
+    <header className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-4 z-30 shrink-0">
       <div className="flex items-center gap-3">
         <div className="p-1.5 bg-indigo-600 rounded-lg text-white shadow-md shadow-indigo-100">
           <Layers className="w-4 h-4" />
