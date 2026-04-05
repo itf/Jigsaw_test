@@ -1,5 +1,6 @@
 import paper from 'paper';
 import { Delaunay } from 'd3-delaunay';
+import { pathItemFromBoundaryData, resetPaperProject } from './paperProject';
 import { Point, Area, AreaType, Operation } from './types';
 
 const COLORS = [
@@ -16,7 +17,7 @@ export function computeTopology(
 ): Record<string, Area> {
   let areas: Record<string, Area> = { [rootArea.id]: rootArea };
   
-  paper.setup(new paper.Size(width, height));
+  resetPaperProject(width, height);
   
   history.forEach(op => {
     if (op.type === 'SUBDIVIDE') {
@@ -35,7 +36,7 @@ export function computeTopology(
         const childId = `${parentId}-child-${i}-${op.id.slice(0, 4)}`;
         childIds.push(childId);
         
-        const parentPath = new paper.Path(parent.boundary);
+        const parentPath = pathItemFromBoundaryData(parent.boundary);
         const cellPath = new paper.Path();
         poly.forEach((pt, j) => {
           if (j === 0) cellPath.moveTo(new paper.Point(pt[0], pt[1]));
@@ -98,7 +99,7 @@ export function computeMergedGroups(
     return area.children.flatMap(childId => getLeafDescendants(childId));
   };
 
-  paper.setup(new paper.Size(width, height));
+  resetPaperProject(width, height);
   
   history.forEach(op => {
     if (op.type === 'MERGE') {
