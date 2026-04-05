@@ -1,14 +1,32 @@
 import { useMemo, useRef } from 'react';
 import paper from 'paper';
 import { Delaunay } from 'd3-delaunay';
-import { Point, Area, AreaType, Connector, Operation } from '../types';
-import { getSharedPerimeter, getPointAtU, createConnectorStamp, resolveCollisions } from '../geometry';
+import { Point, Area, AreaType, Connector, Operation, CreateRootShape } from '../types';
+import { buildAreasFromInitialShape, cloneAreaMap } from '../initial_area';
+import { applyAddWhimsyOp } from '../whimsy_cut';
+import {
+  getSharedPerimeter,
+  getPointAtU,
+  createConnectorStamp,
+  resolveCollisions,
+  connectorOwnerNeighborLeafIds,
+  orientConnectorNormalTowardNeighbor,
+  clampConnectorU,
+} from '../geometry';
+import {
+  computeBooleanGeometry,
+  buildTopoConnectorStampOverlays,
+  type ConnectorOverlay,
+} from '../boolean_connector_geometry';
+import { pathItemFromBoundaryData, resetPaperProject } from '../paperProject';
 import { TopologicalEngine } from '../topology_engine';
 import { COLORS, Tab } from '../constants';
 
 interface PuzzleEngineProps {
   width: number;
   height: number;
+  /** Initial region shape(s) before history; same model as a whimsy seed piece. */
+  initialShape: CreateRootShape;
   history: Operation[];
   activeTab: Tab;
   geometryEngine: 'BOOLEAN' | 'TOPOLOGICAL';
@@ -42,6 +60,7 @@ function connectorSignature(c: Connector): string {
     c.type,
     !!c.isDeleted,
     !!c.isDormant,
+    !!c.clipOverlap,
     c.areaAId,
     c.areaBId,
   ].join('|');
@@ -60,13 +79,26 @@ function clearEdgeConnectors(engine: TopologicalEngine) {
 export interface PuzzleEngineResult {
   topology: Record<string, Area>;
   mergedGroups: Record<string, string[]>;
+  /** Messages from ADD_WHIMSY (small fragments, failed placement). */
+  whimsyWarnings: string[];
   sharedEdges: { id: string; areaAId: string; areaBId: string; pathData: string; isMerged: boolean }[];
   connectors: Connector[];
   resolvedConnectors: Connector[];
+  /** Cut geometry: full booleans (union on owner) — use for Production / laser export. */
   finalPieces: { id: string; pathData: string; color: string }[];
+  /** BOOLEAN preview: neighbor/third subtracts only; tabs drawn via `connectorOverlays`. TOPO: same as `finalPieces`. */
+  previewPieces: { id: string; pathData: string; color: string }[];
+  connectorOverlays: ConnectorOverlay[];
 }
 
-export function usePuzzleEngine({ width, height, history, activeTab, geometryEngine }: PuzzleEngineProps): PuzzleEngineResult {
+export function usePuzzleEngine({
+  width,
+  height,
+  initialShape,
+  history,
+  activeTab,
+  geometryEngine,
+}: PuzzleEngineProps): PuzzleEngineResult {
   // Topological engine: reuse graph across connector param changes; partial getMergedBoundary.
   const topoEngineCacheRef = useRef<{ key: string; engine: TopologicalEngine } | null>(null);
   const topoPieceCacheRef = useRef<Map<string, { id: string; pathData: string; color: string }>>(new Map());
@@ -74,25 +106,20 @@ export function usePuzzleEngine({ width, height, history, activeTab, geometryEng
   const prevConnectorAreasRef = useRef<Record<string, { areaAId: string; areaBId: string }>>({});
   const lastTopoPiecesRef = useRef<{ id: string; pathData: string; color: string }[] | null>(null);
 
-  // 1. Root Area: The base rectangle for the puzzle
-  const rootArea = useMemo<Area>(() => ({
-    id: 'root',
-    parentId: null,
-    type: AreaType.ROOT,
-    children: [],
-    boundary: `M 0 0 L ${width} 0 L ${width} ${height} L 0 ${height} Z`,
-    seedPoint: { x: width / 2, y: height / 2 },
-    isPiece: true,
-    color: '#f1f5f9'
-  }), [width, height]);
+  const baseAreas = useMemo(
+    () => buildAreasFromInitialShape(width, height, initialShape),
+    [width, height, initialShape]
+  );
 
   // 2–3. Topology + merged groups: history order matters (MERGE uses geometry at that moment).
-  const { topology, mergedGroups } = useMemo((): {
+  const { topology, mergedGroups, whimsyWarnings } = useMemo((): {
     topology: Record<string, Area>;
     mergedGroups: Record<string, string[]>;
+    whimsyWarnings: string[];
   } => {
-    const areas: Record<string, Area> = { [rootArea.id]: rootArea };
-    paper.setup(new paper.Size(width, height));
+    const areas = cloneAreaMap(baseAreas);
+    resetPaperProject(width, height);
+    const whimsyWarnings: string[] = [];
 
     const dsu: Record<string, string> = {};
     const find = (id: string): string => {
@@ -151,7 +178,7 @@ export function usePuzzleEngine({ width, height, history, activeTab, geometryEng
         if (!parent) return;
 
         const boundaryData = (clipBoundary as string | undefined) ?? parent.boundary;
-        const parentPath0 = new paper.Path(boundaryData);
+        const parentPath0 = pathItemFromBoundaryData(boundaryData);
         const pb = parentPath0.bounds;
         parentPath0.remove();
         const delaunay = Delaunay.from(points.map((p: Point) => [p.x, p.y]));
@@ -165,7 +192,7 @@ export function usePuzzleEngine({ width, height, history, activeTab, geometryEng
           const childId = `${parentId}-child-${i}-${op.id.slice(0, 4)}`;
           childIds.push(childId);
 
-          const parentPath = new paper.Path(boundaryData);
+          const parentPath = pathItemFromBoundaryData(boundaryData);
           const cellPath = new paper.Path();
           poly.forEach((pt, j) => {
             if (j === 0) cellPath.moveTo(new paper.Point(pt[0], pt[1]));
@@ -200,6 +227,14 @@ export function usePuzzleEngine({ width, height, history, activeTab, geometryEng
             delete areas[id];
           });
         }
+        return;
+      }
+      if (op.type === 'ADD_WHIMSY') {
+        const { warnings, remainderClusters } = applyAddWhimsyOp(areas, op, width, height, find);
+        whimsyWarnings.push(...warnings);
+        for (const { anchorRep, remainderIds } of remainderClusters) {
+          for (const id of remainderIds) union(anchorRep, id);
+        }
       }
     });
 
@@ -211,18 +246,20 @@ export function usePuzzleEngine({ width, height, history, activeTab, geometryEng
       groups[root].push(a.id);
     });
 
-    return { topology: areas, mergedGroups: groups };
-  }, [rootArea, history, width, height]);
+    return { topology: areas, mergedGroups: groups, whimsyWarnings };
+  }, [baseAreas, history, width, height]);
 
   // 4. Shared Edges: For visualization and connector placement
   const sharedEdges = useMemo(() => {
     const leafAreas = (Object.values(topology) as Area[]).filter(a => a.isPiece);
     const edges: { id: string; areaAId: string; areaBId: string; pathData: string; isMerged: boolean }[] = [];
-    
+
     if (leafAreas.length > 200) return [];
 
-    paper.setup(new paper.Size(width, height));
-    
+    resetPaperProject(width, height);
+
+    const whimsyAreas = leafAreas.filter(a => a.type === AreaType.WHIMSY);
+
     const getGroupId = (areaId: string) => {
       for (const [groupId, ids] of Object.entries(mergedGroups as Record<string, string[]>)) {
         if (ids.includes(areaId)) return groupId;
@@ -234,24 +271,42 @@ export function usePuzzleEngine({ width, height, history, activeTab, geometryEng
       for (let j = i + 1; j < leafAreas.length; j++) {
         const areaA = leafAreas[i];
         const areaB = leafAreas[j];
-        
+
+        // Skip edges involving a whimsy piece itself — whimsy boundaries are curved arcs
+        // and getSharedPerimeter returns a degenerate chord for them.
+        if (areaA.type === AreaType.WHIMSY || areaB.type === AreaType.WHIMSY) continue;
+
         const groupA = getGroupId(areaA.id);
         const groupB = getGroupId(areaB.id);
         const isMerged = groupA === groupB;
 
         const shared = getSharedPerimeter(areaA, areaB);
-        if (shared) {
-          if ((shared as paper.Path).length > 5) {
-            edges.push({
-              id: `${areaA.id}-${areaB.id}`,
-              areaAId: areaA.id,
-              areaBId: areaB.id,
-              pathData: shared.pathData,
-              isMerged
-            });
-          }
-          shared.remove();
+        if (!shared) continue;
+
+        // When a whimsy has been cut from the material, two remainder pieces may still share
+        // candidate boundary points on both sides of the whimsy. getSharedPerimeter picks the
+        // farthest pair, producing a chord that crosses through the whimsy. Clip the chord
+        // against all whimsy piece paths and discard it if nothing survives outside them.
+        let edgePath: paper.PathItem = shared;
+        for (const w of whimsyAreas) {
+          if (!edgePath) break;
+          const wPath = pathItemFromBoundaryData(w.boundary);
+          const clipped = edgePath.subtract(wPath);
+          wPath.remove();
+          edgePath.remove();
+          edgePath = clipped;
         }
+
+        if (edgePath && (edgePath as paper.Path).length > 0.05) {
+          edges.push({
+            id: `${areaA.id}-${areaB.id}`,
+            areaAId: areaA.id,
+            areaBId: areaB.id,
+            pathData: edgePath.pathData,
+            isMerged
+          });
+        }
+        edgePath?.remove();
       }
     }
     return edges;
@@ -264,28 +319,25 @@ export function usePuzzleEngine({ width, height, history, activeTab, geometryEng
 
     history.forEach(op => {
       if (op.type === 'ADD_CONNECTOR') {
+        const aId = op.params.areaAId as string;
+        const bId = op.params.areaBId as string;
+        if (!topology[aId] || !topology[bId]) return;
         connList.push({
           id: op.id,
-          areaAId: op.params.areaAId,
-          areaBId: op.params.areaBId,
-          u: op.params.u,
+          areaAId: aId,
+          areaBId: bId,
+          u: clampConnectorU(op.params.u),
           isFlipped: op.params.isFlipped || false,
           type: op.params.type || 'TAB',
           size: op.params.size || 20,
-          isDormant: false
+          isDormant: false,
+          clipOverlap: geometryEngine === 'TOPOLOGICAL' ? true : !!op.params.clipOverlap,
         });
       }
     });
     
     return connList;
-  }, [history, activeTab]);
-
-  // 6. Resolved Connectors: Collision-checked connectors
-  const resolvedConnectors = useMemo(() => {
-    if (activeTab === 'TOPOLOGY' || activeTab === 'MODIFICATION') return [];
-    paper.setup(new paper.Size(width, height));
-    return resolveCollisions(connectors, topology);
-  }, [connectors, topology, activeTab, width, height]);
+  }, [history, activeTab, geometryEngine, topology]);
 
   const mergeHistorySig = useMemo(
     () =>
@@ -301,46 +353,34 @@ export function usePuzzleEngine({ width, height, history, activeTab, geometryEng
     [topology, mergedGroups, width, height, mergeHistorySig]
   );
 
+  /** BOOLEAN: collision resolve + one Paper pipeline (no duplicate resolve+reset before this memo). */
+  const booleanGeometry = useMemo(() => {
+    if (geometryEngine !== 'BOOLEAN' || Object.keys(topology).length === 0) return null;
+    return computeBooleanGeometry(
+      width,
+      height,
+      topology,
+      mergedGroups as Record<string, string[]>,
+      connectors
+    );
+  }, [topology, mergedGroups, connectors, width, height, geometryEngine]);
+
+  // Resolved connectors: BOOLEAN reuses collision result from `computeBooleanGeometry`; TOPO uses resolve only.
+  const resolvedConnectors = useMemo(() => {
+    if (activeTab === 'TOPOLOGY' || activeTab === 'MODIFICATION') return [];
+    if (geometryEngine === 'BOOLEAN') {
+      return booleanGeometry?.resolvedConnectors ?? [];
+    }
+    resetPaperProject(width, height);
+    return resolveCollisions(connectors, topology);
+  }, [connectors, topology, activeTab, width, height, geometryEngine, booleanGeometry]);
+
   // 7. Final Pieces: The base geometry of each piece (merged or single)
   const finalPieces = useMemo(() => {
     if (Object.keys(topology).length === 0) return [];
-    
+
     if (geometryEngine === 'BOOLEAN') {
-      paper.setup(new paper.Size(width, height));
-      const pieces: { id: string; pathData: string; color: string }[] = [];
-      
-      Object.entries(mergedGroups as Record<string, string[]>).forEach(([groupId, areaIds]) => {
-        if (areaIds.length === 1) {
-          const area = topology[areaIds[0]];
-          pieces.push({ id: area.id, pathData: area.boundary, color: area.color });
-        } else {
-          let mergedPath: paper.PathItem | null = null;
-          areaIds.forEach(id => {
-            const area = topology[id];
-            const path = new paper.Path(area.boundary);
-            path.clockwise = true;
-            if (!mergedPath) {
-              mergedPath = path;
-            } else {
-              const next = mergedPath.unite(path);
-              mergedPath.remove();
-              path.remove();
-              mergedPath = next;
-            }
-          });
-          if (mergedPath) {
-            const cleaned = (mergedPath as paper.PathItem).reduce({ insert: false }) as paper.PathItem;
-            cleaned.reorient(true, true);
-            pieces.push({ 
-              id: groupId, 
-              pathData: cleaned.pathData, 
-              color: topology[areaIds[0]].color 
-            });
-            cleaned.remove();
-          }
-        }
-      });
-      return pieces;
+      return booleanGeometry?.basePieces ?? [];
     } else {
       // Topological Engine — reuse face-edge graph when only connector params change.
       const mg = mergedGroups as Record<string, string[]>;
@@ -380,14 +420,15 @@ export function usePuzzleEngine({ width, height, history, activeTab, geometryEng
         engine = topoEngineCacheRef.current.engine;
       }
 
-      // Which merged groups can a connector affect? Only the two leaf areas on its edge,
-      // mapped through mergedGroups — same pieces a bbox query would pick (the shared edge
-      // cannot touch any other piece’s interior without crossing those two).
+      // Which merged groups need recomputing? Edge pieces for changed connectors; **all** groups when any
+      // connector param changes — clipOverlap toggles third-party subtracts and must not reuse stale cache.
       const affectedGroups = new Set<string>();
+      let anyConnectorSigChanged = false;
       if (!engineRebuilt) {
         for (const c of resolvedConnectors) {
           const sig = connectorSignature(c);
           if (prevConnectorSigRef.current[c.id] !== sig) {
+            anyConnectorSigChanged = true;
             affectedGroups.add(getGroupId(c.areaAId));
             affectedGroups.add(getGroupId(c.areaBId));
           }
@@ -396,10 +437,14 @@ export function usePuzzleEngine({ width, height, history, activeTab, geometryEng
           if (!resolvedConnectors.some(c => c.id === oldId)) {
             const meta = prevConnectorAreasRef.current[oldId];
             if (meta) {
+              anyConnectorSigChanged = true;
               affectedGroups.add(getGroupId(meta.areaAId));
               affectedGroups.add(getGroupId(meta.areaBId));
             }
           }
+        }
+        if (anyConnectorSigChanged) {
+          mergedEntries.forEach(([groupId]) => affectedGroups.add(groupId));
         }
       }
 
@@ -425,12 +470,25 @@ export function usePuzzleEngine({ width, height, history, activeTab, geometryEng
 
         const shared = getSharedPerimeter(areaA, areaB);
         if (!shared) return;
+        const chordPath = shared as paper.Path;
+        const chordEnd0 = chordPath.firstSegment.point.clone();
+        const chordEnd1 = chordPath.lastSegment.point.clone();
         const pos = getPointAtU(shared, c.u);
         shared.remove();
         if (!pos) return;
 
         const ownerFaceId = c.isFlipped ? c.areaBId : c.areaAId;
-        engine.addConnectorAtAnchor(c.areaAId, c.areaBId, pos.point, stampPathData, c.isFlipped, ownerFaceId);
+        engine.addConnectorAtAnchor(
+          c.areaAId,
+          c.areaBId,
+          pos.point,
+          stampPathData,
+          c.isFlipped,
+          ownerFaceId,
+          c.u,
+          chordEnd0,
+          chordEnd1
+        );
       });
 
       for (const c of resolvedConnectors) {
@@ -447,6 +505,11 @@ export function usePuzzleEngine({ width, height, history, activeTab, geometryEng
       const needFullPass = engineRebuilt || !cacheComplete || affectedGroups.size === 0;
       const pieces: { id: string; pathData: string; color: string }[] = [];
 
+      const hasActiveConnectors = resolvedConnectors.some(c => !c.isDeleted && !c.isDormant);
+      if (hasActiveConnectors) {
+        resetPaperProject(width, height);
+      }
+
       for (const [groupId, areaIds] of mergedEntries) {
         const color = topology[areaIds[0]]?.color || '#f1f5f9';
 
@@ -458,8 +521,105 @@ export function usePuzzleEngine({ width, height, history, activeTab, geometryEng
           }
         }
 
-        const boundary = engine.getMergedBoundary(areaIds);
-        const p = { id: groupId, pathData: boundary, color };
+        // The topological engine assumes adjacent faces share edges in opposite traversal
+        // directions (standard planar graph property). WHIMSY pieces break this: the whimsy's
+        // outer circle boundary and the remainder's inner circle hole both traverse the shared
+        // edge CCW after the engine's reversal step, so edge deduplication overwrites faceAId
+        // with the remainder's id — the whimsy face disappears from the graph. Fall back to
+        // boolean union of area.boundary values (same as the boolean engine) for any group
+        // that contains a WHIMSY area. This also fixes the "leftover perimeter" bug when the
+        // whimsy is deleted (merged with its neighbors), because the union correctly cancels
+        // the circular hole.
+        const hasWhimsy = areaIds.some(id => topology[id]?.type === AreaType.WHIMSY);
+        let boundaryData: string;
+        if (hasWhimsy) {
+          let mergedPath: paper.PathItem | null = null;
+          for (const id of areaIds) {
+            const area = topology[id];
+            if (!area) continue;
+            const path = pathItemFromBoundaryData(area.boundary);
+            if (!mergedPath) {
+              mergedPath = path;
+            } else {
+              const next = mergedPath.unite(path);
+              mergedPath.remove();
+              path.remove();
+              mergedPath = next;
+            }
+          }
+          if (mergedPath) {
+            const cleaned = (mergedPath as paper.PathItem).reduce({ insert: false }) as paper.PathItem;
+            cleaned.reorient(true, true);
+            boundaryData = cleaned.pathData;
+            cleaned.remove();
+            mergedPath.remove();
+          } else {
+            boundaryData = '';
+          }
+        } else {
+          boundaryData = engine.getMergedBoundary(areaIds);
+        }
+
+        // Graph splice puts the same tab outline on both sides of a shared edge; subtract the stamp
+        // from neighbor pieces so material matches boolean (tab on owner only, socket on neighbor).
+        if (boundaryData && hasActiveConnectors) {
+          let piecePath: paper.PathItem | null = pathItemFromBoundaryData(boundaryData);
+
+          resolvedConnectors.forEach(c => {
+            if (c.isDeleted || c.isDormant || !piecePath) return;
+            const areaA = topology[c.areaAId];
+            const areaB = topology[c.areaBId];
+            if (!areaA || !areaB) return;
+
+            const shared = getSharedPerimeter(areaA, areaB);
+            if (!shared) return;
+            const pos = getPointAtU(shared, c.u);
+            shared.remove();
+            if (!pos) return;
+
+            const { ownerLeafId, neighborLeafId } = connectorOwnerNeighborLeafIds(c);
+            let normal = c.isFlipped ? pos.normal.multiply(-1) : pos.normal;
+            const nb = topology[neighborLeafId]?.boundary;
+            if (nb) normal = orientConnectorNormalTowardNeighbor(pos.point, normal, nb);
+            const stamp = createConnectorStamp(pos.point, normal, c.type, c.size);
+
+            const ownerGroupId = getGroupId(ownerLeafId);
+            const neighborGroupId = getGroupId(neighborLeafId);
+
+            if (ownerGroupId === neighborGroupId) {
+              stamp.remove();
+              return;
+            }
+
+            const isNeighbor = neighborGroupId === groupId;
+            const isThirdPartyClip =
+              !!c.clipOverlap &&
+              groupId !== ownerGroupId &&
+              groupId !== neighborGroupId &&
+              stamp.bounds.intersects(piecePath.bounds);
+
+            if (!isNeighbor && !isThirdPartyClip) {
+              stamp.remove();
+              return;
+            }
+
+            const stampOp = stamp.clone();
+            const next = piecePath.subtract(stampOp);
+            stampOp.remove();
+            stamp.remove();
+            if (next) {
+              piecePath.remove();
+              piecePath = next;
+            }
+          });
+
+          if (piecePath) {
+            boundaryData = piecePath.pathData;
+            piecePath.remove();
+          }
+        }
+
+        const p = { id: groupId, pathData: boundaryData, color };
         topoPieceCacheRef.current.set(groupId, p);
         pieces.push(p);
       }
@@ -467,105 +627,49 @@ export function usePuzzleEngine({ width, height, history, activeTab, geometryEng
       lastTopoPiecesRef.current = pieces;
       return pieces;
     }
-  }, [topology, mergedGroups, width, height, history, resolvedConnectors, geometryEngine, topoGeometryKeyMemo]);
+  }, [
+    topology,
+    mergedGroups,
+    width,
+    height,
+    history,
+    resolvedConnectors,
+    geometryEngine,
+    topoGeometryKeyMemo,
+    booleanGeometry,
+  ]);
 
-  // 8. Final Pieces with Connectors (Boolean Engine specific)
+  // 8. Cut pieces (full booleans — laser / production truth)
   const finalPiecesWithConnectors = useMemo(() => {
     if (geometryEngine === 'TOPOLOGICAL') return finalPieces;
+    return booleanGeometry?.cutPieces ?? [];
+  }, [geometryEngine, finalPieces, booleanGeometry]);
 
-    paper.setup(new paper.Size(width, height));
-    const pieces: { id: string; pathData: string; color: string }[] = [];
-    
-    const getGroupId = (areaId: string) => {
-      for (const [groupId, ids] of Object.entries(mergedGroups as Record<string, string[]>)) {
-        if (ids.includes(areaId)) return groupId;
-      }
-      return areaId;
-    };
+  // Canvas preview (BOOLEAN): no owner union; tabs in `connectorOverlays`
+  const previewPiecesWithConnectors = useMemo(() => {
+    if (geometryEngine !== 'BOOLEAN') return finalPiecesWithConnectors;
+    return booleanGeometry?.previewPieces ?? finalPiecesWithConnectors;
+  }, [geometryEngine, finalPiecesWithConnectors, booleanGeometry]);
 
-    const stamps = resolvedConnectors
-      .filter(c => !c.isDeleted && !c.isDormant)
-      .map(c => {
-        const areaA = topology[c.areaAId];
-        const areaB = topology[c.areaBId];
-        const shared = getSharedPerimeter(areaA, areaB);
-        if (!shared) return null;
-        
-        const pos = getPointAtU(shared, c.u);
-        shared.remove();
-        if (!pos) return null;
-        
-        const normal = c.isFlipped ? pos.normal.multiply(-1) : pos.normal;
-        const stamp = createConnectorStamp(pos.point, normal, c.type, c.size);
-        
-        const pathA = new paper.Path(areaA.boundary);
-        const pathB = new paper.Path(areaB.boundary);
-        const testPoint = pos.point.add(normal.multiply(c.size * 0.5));
-        
-        let ownerGroupId = '';
-        if (pathB.contains(testPoint)) {
-          ownerGroupId = getGroupId(c.areaAId);
-        } else if (pathA.contains(testPoint)) {
-          ownerGroupId = getGroupId(c.areaBId);
-        } else {
-          ownerGroupId = getGroupId(c.areaAId);
-        }
-        
-        pathA.remove();
-        pathB.remove();
-
-        const groupA = getGroupId(c.areaAId);
-        const groupB = getGroupId(c.areaBId);
-
-        return {
-          stamp,
-          ownerGroupId,
-          neighborGroupId: groupA === ownerGroupId ? groupB : groupA,
-          isInternal: groupA === groupB
-        };
-      })
-      .filter((s): s is { stamp: paper.PathItem; ownerGroupId: string; neighborGroupId: string; isInternal: boolean } => s !== null);
-
-    finalPieces.forEach(piece => {
-      let piecePath: paper.PathItem | null = new paper.Path(piece.pathData);
-      
-      stamps.forEach(({ stamp, ownerGroupId, neighborGroupId, isInternal }) => {
-        if (isInternal || !piecePath) return;
-        
-        if (ownerGroupId === piece.id) {
-          const next = piecePath.unite(stamp);
-          if (next) {
-            piecePath.remove();
-            piecePath = next;
-          }
-        } else if (neighborGroupId === piece.id) {
-          const next = piecePath.subtract(stamp);
-          if (next) {
-            piecePath.remove();
-            piecePath = next;
-          }
-        }
-      });
-      
-      if (piecePath) {
-        pieces.push({ id: piece.id, pathData: piecePath.pathData, color: piece.color });
-        piecePath.remove();
-      } else {
-        pieces.push(piece);
-      }
-    });
-    
-    stamps.forEach(s => s.stamp.remove());
-    
-    return pieces;
-  }, [topology, finalPieces, mergedGroups, resolvedConnectors, activeTab, width, height, geometryEngine]);
+  const connectorOverlays = useMemo((): ConnectorOverlay[] => {
+    if (geometryEngine === 'TOPOLOGICAL') {
+      if (Object.keys(topology).length === 0) return [];
+      if (activeTab === 'TOPOLOGY' || activeTab === 'MODIFICATION') return [];
+      return buildTopoConnectorStampOverlays(width, height, topology, resolvedConnectors);
+    }
+    if (geometryEngine !== 'BOOLEAN') return [];
+    return booleanGeometry?.connectorOverlays ?? [];
+  }, [geometryEngine, topology, width, height, resolvedConnectors, booleanGeometry, activeTab]);
 
   return {
     topology,
     mergedGroups,
+    whimsyWarnings,
     sharedEdges,
     connectors,
     resolvedConnectors,
-    finalPieces: finalPiecesWithConnectors
+    finalPieces: finalPiecesWithConnectors,
+    previewPieces: previewPiecesWithConnectors,
+    connectorOverlays,
   };
 }

@@ -1,6 +1,23 @@
 import paper from 'paper';
 import { Point, Area, Connector } from './types';
 import { distance, getAngle, rotatePoint } from '../shared/utils';
+import { pathItemFromBoundaryData } from './paperProject';
+
+/**
+ * `CompoundPath` (multi-contour boundaries, e.g. piece with a hole) has no iterable root `.segments`;
+ * shared-perimeter logic runs on each child `Path`.
+ */
+function contourPathsForSegments(p: paper.PathItem): paper.Path[] {
+  if (p instanceof paper.CompoundPath) {
+    const out: paper.Path[] = [];
+    for (let i = 0; i < p.children.length; i++) {
+      const ch = p.children[i];
+      if (ch instanceof paper.Path) out.push(ch);
+    }
+    return out.length > 0 ? out : [];
+  }
+  return [p as paper.Path];
+}
 
 /** Closed polygon edges as segment pairs (Paper.js path segments are polygon vertices). */
 function getClosedPathSegments(path: paper.Path): [paper.Point, paper.Point][] {
@@ -130,6 +147,53 @@ export function generateGridPoints(width: number, height: number, rows: number, 
   return points;
 }
 
+const SUBDIVIDE_BLEED_EPS = 0.75;
+
+/**
+ * When merging multiple leaf boundaries for SUBDIVIDE, Paper.js often returns a compound path whose
+ * bounds are the full puzzle rectangle but the geometry still has a hole (e.g. four frame pieces
+ * around a whimsy cut without the disc in the merge set). Voronoi seeds use the outer bounds, but
+ * intersect(cell, clip) then clips to a ring — cells are not equal quarters. If the union clearly
+ * bleeds the canvas but net area is below the full rectangle, use a solid outer rectangle as clip.
+ */
+export function resolveSubdivideClipBoundary(
+  cleaned: paper.PathItem,
+  canvasW: number,
+  canvasH: number
+): { clipPathData: string; bounds: { x: number; y: number; width: number; height: number } } {
+  const b = cleaned.bounds;
+  const fullArea = canvasW * canvasH;
+  const bleedsCanvas =
+    Math.abs(b.x) < SUBDIVIDE_BLEED_EPS &&
+    Math.abs(b.y) < SUBDIVIDE_BLEED_EPS &&
+    Math.abs(b.width - canvasW) < SUBDIVIDE_BLEED_EPS &&
+    Math.abs(b.height - canvasH) < SUBDIVIDE_BLEED_EPS;
+
+  let netArea = 0;
+  if (cleaned instanceof paper.CompoundPath) {
+    for (let i = 0; i < cleaned.children.length; i++) {
+      const ch = cleaned.children[i];
+      if (ch instanceof paper.Path) netArea += ch.area;
+    }
+  } else if (cleaned instanceof paper.Path) {
+    netArea = cleaned.area;
+  }
+
+  const hasSignificantHole = bleedsCanvas && Math.abs(netArea) < fullArea * 0.99;
+
+  if (hasSignificantHole) {
+    return {
+      clipPathData: `M 0 0 L ${canvasW} 0 L ${canvasW} ${canvasH} L 0 ${canvasH} Z`,
+      bounds: { x: 0, y: 0, width: canvasW, height: canvasH },
+    };
+  }
+
+  return {
+    clipPathData: cleaned.pathData,
+    bounds: { x: b.x, y: b.y, width: b.width, height: b.height },
+  };
+}
+
 /**
  * Hex-style seed layout on a rows×cols lattice within bounds (pointy-top stagger).
  */
@@ -192,26 +256,80 @@ export function generateHexPoints(width: number, height: number, size: number, j
  * Finds the shared boundary between two areas.
  * Returns a PathItem representing the shared segments.
  */
+function sharedPerimeterFromCurveIntersections(areaA: Area, areaB: Area, tol: number): paper.Path | null {
+  const topA = pathItemFromBoundaryData(areaA.boundary);
+  const topB = pathItemFromBoundaryData(areaB.boundary);
+  const pathsA = contourPathsForSegments(topA);
+  const pathsB = contourPathsForSegments(topB);
+  pathsA.forEach(p => p.flatten(2));
+  pathsB.forEach(p => p.flatten(2));
+  const locs: paper.CurveLocation[] = [];
+  for (const pa of pathsA) {
+    for (const pb of pathsB) {
+      locs.push(...pa.getIntersections(pb));
+    }
+  }
+  topA.remove();
+  topB.remove();
+  if (locs.length < 2) return null;
+  const pts = locs.map(l => l.point);
+  const unique = dedupeSharedPoints(pts, tol);
+  if (unique.length < 2) return null;
+  let p1 = unique[0];
+  let p2 = unique[1];
+  let maxDist = p1.getDistance(p2);
+  for (let i = 0; i < unique.length; i++) {
+    for (let j = i + 1; j < unique.length; j++) {
+      const d = unique[i].getDistance(unique[j]);
+      if (d > maxDist) {
+        maxDist = d;
+        p1 = unique[i];
+        p2 = unique[j];
+      }
+    }
+  }
+  if (maxDist < 1) return null;
+  const result = new paper.Path();
+  result.add(p1);
+  result.add(p2);
+  return result;
+}
+
 export function getSharedPerimeter(areaA: Area, areaB: Area): paper.PathItem | null {
-  // Quick bounding-box pre-check
-  const pathA = new paper.Path(areaA.boundary);
-  const pathB = new paper.Path(areaB.boundary);
-  const expandedA = pathA.bounds.clone().expand(2);
-  if (!expandedA.intersects(pathB.bounds)) {
-    pathA.remove();
-    pathB.remove();
+  const topA = pathItemFromBoundaryData(areaA.boundary);
+  const topB = pathItemFromBoundaryData(areaB.boundary);
+  const pathsA = contourPathsForSegments(topA);
+  const pathsB = contourPathsForSegments(topB);
+  if (pathsA.length === 0 || pathsB.length === 0) {
+    topA.remove();
+    topB.remove();
+    return null;
+  }
+
+  pathsA.forEach(p => p.flatten(2));
+  pathsB.forEach(p => p.flatten(2));
+
+  // Quick bounding-box pre-check (compound / path both have .bounds)
+  const expandedA = topA.bounds.clone().expand(2);
+  if (!expandedA.intersects(topB.bounds)) {
+    topA.remove();
+    topB.remove();
     return null;
   }
 
   // Vertex–vertex matches (shared corners).
-  const TOLERANCE = 1.5;
+  const TOLERANCE = 2.5;
   const sharedPoints: paper.Point[] = [];
 
-  for (const segA of pathA.segments) {
-    for (const segB of pathB.segments) {
-      if (segA.point.getDistance(segB.point) < TOLERANCE) {
-        sharedPoints.push(segA.point.clone());
-        break;
+  for (const pathA of pathsA) {
+    for (const pathB of pathsB) {
+      for (const segA of pathA.segments) {
+        for (const segB of pathB.segments) {
+          if (segA.point.getDistance(segB.point) < TOLERANCE) {
+            sharedPoints.push(segA.point.clone());
+            break;
+          }
+        }
       }
     }
   }
@@ -219,24 +337,28 @@ export function getSharedPerimeter(areaA: Area, areaB: Area): paper.PathItem | n
   // T-junctions / partial overlaps: a vertex of one polygon can lie in the interior of the
   // other’s edge (no matching vertex on the neighbor). Also collect segment–segment
   // crossings and collinear overlaps (shared sub-edges).
-  const segsA = getClosedPathSegments(pathA);
-  const segsB = getClosedPathSegments(pathB);
+  const segsA = pathsA.flatMap(p => getClosedPathSegments(p));
+  const segsB = pathsB.flatMap(p => getClosedPathSegments(p));
 
-  for (const seg of pathA.segments) {
-    const v = seg.point;
-    for (const [a, b] of segsB) {
-      if (pointOnSegment(v, a, b, TOLERANCE)) {
-        sharedPoints.push(v.clone());
-        break;
+  for (const pathA of pathsA) {
+    for (const seg of pathA.segments) {
+      const v = seg.point;
+      for (const [a, b] of segsB) {
+        if (pointOnSegment(v, a, b, TOLERANCE)) {
+          sharedPoints.push(v.clone());
+          break;
+        }
       }
     }
   }
-  for (const seg of pathB.segments) {
-    const v = seg.point;
-    for (const [a, b] of segsA) {
-      if (pointOnSegment(v, a, b, TOLERANCE)) {
-        sharedPoints.push(v.clone());
-        break;
+  for (const pathB of pathsB) {
+    for (const seg of pathB.segments) {
+      const v = seg.point;
+      for (const [a, b] of segsA) {
+        if (pointOnSegment(v, a, b, TOLERANCE)) {
+          sharedPoints.push(v.clone());
+          break;
+        }
       }
     }
   }
@@ -253,11 +375,15 @@ export function getSharedPerimeter(areaA: Area, areaB: Area): paper.PathItem | n
     }
   }
 
-  pathA.remove();
-  pathB.remove();
+  topA.remove();
+  topB.remove();
 
-  const unique = dedupeSharedPoints(sharedPoints, TOLERANCE);
-  if (unique.length < 2) return null;
+  let unique = dedupeSharedPoints(sharedPoints, TOLERANCE);
+  if (unique.length < 2) {
+    const fallback = sharedPerimeterFromCurveIntersections(areaA, areaB, TOLERANCE);
+    if (fallback) return fallback;
+    return null;
+  }
 
   // Use the pair with greatest distance — chord along the shared interface.
   let p1 = unique[0];
@@ -286,6 +412,37 @@ export function getSharedPerimeter(areaA: Area, areaB: Area): paper.PathItem | n
   return result;
 }
 
+/** Avoid u at exact endpoints of shared perimeters (topo engine / sampling edge cases). */
+export const CONNECTOR_U_MIN = 0.001;
+export const CONNECTOR_U_MAX = 0.999;
+
+export function clampConnectorU(u: number): number {
+  if (!Number.isFinite(u)) return 0.5;
+  return Math.max(CONNECTOR_U_MIN, Math.min(CONNECTOR_U_MAX, u));
+}
+
+/**
+ * Chord normals from getPointAtU can point either perpendicular direction; the tab must extend into the
+ * neighbor piece. Flip the normal when a short step along it does not land inside the neighbor boundary.
+ * Requires an active Paper.js project (same scope as shared-perimeter / stamp booleans).
+ */
+export function orientConnectorNormalTowardNeighbor(
+  anchor: paper.Point,
+  normal: paper.Point,
+  neighborBoundarySvg: string
+): paper.Point {
+  const np = pathItemFromBoundaryData(neighborBoundarySvg);
+  const step = 5;
+  const along = anchor.add(normal.multiply(step));
+  const opposite = anchor.add(normal.multiply(-step));
+  const alongIn = np.contains(along);
+  const oppIn = np.contains(opposite);
+  np.remove();
+  if (alongIn && !oppIn) return normal;
+  if (oppIn && !alongIn) return normal.multiply(-1);
+  return normal;
+}
+
 /**
  * Gets the point and normal at a normalized position 'u' along a path.
  */
@@ -295,11 +452,25 @@ export function getPointAtU(path: paper.PathItem, u: number): { point: paper.Poi
   // Cast to Path or CompoundPath to access length and getPointAt
   const p = path as paper.Path;
   const length = p.length;
-  const offset = u * length;
+  const uu = clampConnectorU(u);
+  const offset = uu * length;
   const point = p.getPointAt(offset);
   const normal = p.getNormalAt(offset);
   
   return { point, normal };
+}
+
+/**
+ * Leaf pieces that receive boolean union (owner) vs subtract (neighbor) for this connector.
+ * Default: tab protrudes into areaB → owner areaA, neighbor areaB. Flipped: into areaA → owner areaB.
+ * This matches `Connector.isFlipped` and avoids `path.contains(testPoint)` failures on vertical/horizontal chords and at many u values.
+ */
+export function connectorOwnerNeighborLeafIds(
+  c: Pick<Connector, 'isFlipped' | 'areaAId' | 'areaBId'>
+): { ownerLeafId: string; neighborLeafId: string } {
+  return c.isFlipped
+    ? { ownerLeafId: c.areaBId, neighborLeafId: c.areaAId }
+    : { ownerLeafId: c.areaAId, neighborLeafId: c.areaBId };
 }
 
 /**

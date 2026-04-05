@@ -2,8 +2,14 @@ import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react'
 import paper from 'paper';
 import { Maximize2, Minus, Plus } from 'lucide-react';
 import { Tab } from '../constants';
-import { Area, Connector } from '../types';
+import { Area, Connector, Point } from '../types';
 import { getSharedPerimeter, getPointAtU } from '../geometry';
+import { resetPaperProject } from '../paperProject';
+import type { ConnectorOverlay } from '../boolean_connector_geometry';
+
+function sanitizeSvgId(id: string) {
+  return id.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
 
 interface V2CanvasProps {
   width: number;
@@ -12,6 +18,8 @@ interface V2CanvasProps {
   isMobile: boolean;
   activeTab: Tab;
   displayPieces: { id: string; pathData: string; color: string }[];
+  /** BOOLEAN preview: tab fills above pieces when clip overlap is off (tab is baked into paths when on). */
+  connectorOverlays?: ConnectorOverlay[];
   selectedId: string | null;
   mergePickIds: string[];
   sharedEdges: { id: string; areaAId: string; areaBId: string; pathData: string; isMerged: boolean }[];
@@ -25,6 +33,11 @@ interface V2CanvasProps {
   setSelectedType: (type: 'AREA' | 'CONNECTOR' | 'NONE') => void;
   longPressProps: any;
   onBackgroundClick?: () => void;
+  /** Semi-transparent preview + click-to-place (Topology). */
+  whimsyPlacementActive?: boolean;
+  whimsyPreviewPathData?: string | null;
+  onWhimsyBoardPointerMove?: (p: Point) => void;
+  onWhimsyCommit?: (p: Point) => void;
 }
 
 export const V2Canvas: React.FC<V2CanvasProps> = ({
@@ -34,6 +47,7 @@ export const V2Canvas: React.FC<V2CanvasProps> = ({
   isMobile,
   activeTab,
   displayPieces,
+  connectorOverlays = [],
   selectedId,
   mergePickIds,
   sharedEdges,
@@ -47,8 +61,25 @@ export const V2Canvas: React.FC<V2CanvasProps> = ({
   setSelectedType,
   longPressProps,
   onBackgroundClick,
+  whimsyPlacementActive = false,
+  whimsyPreviewPathData = null,
+  onWhimsyBoardPointerMove,
+  onWhimsyCommit,
 }) => {
   const outerRef = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+
+  const clientToBoard = useCallback((clientX: number, clientY: number): Point => {
+    const svg = svgRef.current;
+    if (!svg) return { x: 0, y: 0 };
+    const pt = svg.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return { x: 0, y: 0 };
+    const p = pt.matrixTransform(ctm.inverse());
+    return { x: p.x, y: p.y };
+  }, []);
 
   // ── View state ────────────────────────────────────────────────────────────
   const [zoom, setZoom] = useState(fitScale);
@@ -136,6 +167,7 @@ export const V2Canvas: React.FC<V2CanvasProps> = ({
 
   const onMouseDown = (e: React.MouseEvent) => {
     if (isMobile) return;
+    if (whimsyPlacementActive) return;
     // Left-button drag anywhere in the canvas, or middle-button on anything
     if (e.button !== 0 && e.button !== 1) return;
     dragRef.current = {
@@ -197,7 +229,7 @@ export const V2Canvas: React.FC<V2CanvasProps> = ({
   // (e.g. dragging the u slider was rebuilding paths every frame).
   const connectorAnchors = useMemo(() => {
     if (activeTab !== 'CONNECTION' && activeTab !== 'RESOLUTION') return [];
-    paper.setup(new paper.Size(width, height));
+    resetPaperProject(width, height);
     const out: { id: string; x: number; y: number; isDeleted: boolean }[] = [];
     for (const c of resolvedConnectors) {
       const areaA = topology[c.areaAId];
@@ -233,6 +265,7 @@ export const V2Canvas: React.FC<V2CanvasProps> = ({
         }}
       >
         <svg
+          ref={svgRef}
           width="100%"
           height="100%"
           viewBox={`0 0 ${width} ${height}`}
@@ -248,11 +281,36 @@ export const V2Canvas: React.FC<V2CanvasProps> = ({
                 <feMergeNode in="SourceGraphic" />
               </feMerge>
             </filter>
+            {connectorOverlays.map(o =>
+              o.clipPathData ? (
+                <clipPath key={`co-clip-def-${o.connectorId}`} id={`co-clip-${sanitizeSvgId(o.connectorId)}`}>
+                  <path d={o.clipPathData} fillRule="evenodd" />
+                </clipPath>
+              ) : null
+            )}
           </defs>
           {/* Pieces */}
           <g>
             {displayPieces.map(piece => {
-              if (activeTab === 'PRODUCTION' || activeTab === 'MODIFICATION') {
+              if (activeTab === 'PRODUCTION') {
+                return (
+                  <path
+                    key={piece.id}
+                    d={piece.pathData}
+                    fill="none"
+                    stroke={piece.color}
+                    strokeWidth={1}
+                    strokeLinejoin="round"
+                    strokeLinecap="round"
+                    fillRule="evenodd"
+                    className="transition-all duration-300 hover:opacity-80 cursor-pointer"
+                    onMouseEnter={() => setHoveredId(piece.id)}
+                    onMouseLeave={() => setHoveredId(null)}
+                    onClick={(e) => { e.stopPropagation(); handleAreaClick(piece.id, e); }}
+                  />
+                );
+              }
+              if (activeTab === 'MODIFICATION') {
                 return (
                   <path
                     key={piece.id}
@@ -323,6 +381,24 @@ export const V2Canvas: React.FC<V2CanvasProps> = ({
             })}
           </g>
 
+          {/* Connector tab fills (Boolean / topological preview) — above piece paths */}
+          {connectorOverlays.length > 0 && (
+            <g className="pointer-events-none" aria-hidden>
+              {connectorOverlays.map(o => (
+                <path
+                  key={o.connectorId}
+                  d={o.stampPathData}
+                  fill={o.fillColor}
+                  fillOpacity={0.92}
+                  fillRule="evenodd"
+                  style={{
+                    clipPath: o.clipPathData ? `url(#co-clip-${sanitizeSvgId(o.connectorId)})` : undefined,
+                  }}
+                />
+              ))}
+            </g>
+          )}
+
           {/* Shared Edges */}
           {(activeTab === 'TOPOLOGY' || activeTab === 'MODIFICATION' || activeTab === 'CONNECTION') && (
             <g>
@@ -350,7 +426,7 @@ export const V2Canvas: React.FC<V2CanvasProps> = ({
                     pt.x = e.clientX;
                     pt.y = e.clientY;
                     const localPt = pt.matrixTransform(svg.getScreenCTM()?.inverse());
-                    paper.setup(new paper.Size(width, height));
+                    resetPaperProject(width, height);
                     const path = new paper.Path(edge.pathData);
                     const nearest = path.getNearestLocation(new paper.Point(localPt.x, localPt.y));
                     const u = nearest.offset / path.length;
@@ -383,6 +459,37 @@ export const V2Canvas: React.FC<V2CanvasProps> = ({
                 </g>
               ))}
             </g>
+          )}
+
+          {whimsyPlacementActive && whimsyPreviewPathData && (
+            <g className="pointer-events-none" aria-hidden>
+              <path
+                d={whimsyPreviewPathData}
+                fill="rgba(168, 85, 247, 0.2)"
+                stroke="rgba(109, 40, 217, 0.95)"
+                strokeWidth={2}
+                strokeLinejoin="round"
+                fillRule="evenodd"
+              />
+            </g>
+          )}
+          {whimsyPlacementActive && (
+            <rect
+              width={width}
+              height={height}
+              fill="transparent"
+              className="cursor-crosshair"
+              style={{ pointerEvents: 'all' }}
+              aria-label="Click to place whimsy"
+              onMouseMove={e => {
+                onWhimsyBoardPointerMove?.(clientToBoard(e.clientX, e.clientY));
+              }}
+              onClick={e => {
+                e.preventDefault();
+                e.stopPropagation();
+                onWhimsyCommit?.(clientToBoard(e.clientX, e.clientY));
+              }}
+            />
           )}
         </svg>
       </div>

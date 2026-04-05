@@ -13,7 +13,7 @@ npm install
 # If @tailwindcss/oxide native binding is missing (common after env switches):
 npm install @tailwindcss/oxide-linux-x64-gnu
 npm run dev        # http://localhost:3000
-npm test           # 8 passing tests
+npm test           # Vitest (see Test suite)
 npm run lint       # tsc --noEmit
 ```
 
@@ -45,14 +45,16 @@ src/
     ├── App.tsx                 App root: state, actions, layout
     ├── types.ts                Core data structures
     ├── constants.ts            Tab enum, colour palette
-    ├── geometry.ts             Point generators, getSharedPerimeter, connector stamps
-    ├── topology_engine.ts      Face-edge-vertex graph (the canonical engine)
+    ├── geometry.ts             Point generators, getSharedPerimeter, connector stamps, clampConnectorU
+    ├── boolean_connector_geometry.ts  Paper.js booleans: base pieces, cut/preview, overlays, computeBooleanGeometry
+    ├── paperProject.ts         resetPaperProject — one active Paper project; avoids leaks when params change every frame
+    ├── topology_engine.ts      Face-edge-vertex graph (topological engine)
     ├── topology.ts             Old alternative — likely to be removed
     ├── hooks/
-    │   └── usePuzzleEngine.ts  8-stage memoised pipeline
+    │   └── usePuzzleEngine.ts  Memoised pipeline (boolean + topological branches)
     ├── components/
     │   ├── V2Canvas.tsx        SVG renderer + zoom/pan
-    │   ├── V2ActionBar.tsx     Two-row toolbar (tab controls + selection panel)
+    │   ├── V2ActionBar.tsx     Topology split/merge/delete + other tab hints; selection row
     │   ├── V2Header.tsx        Logo, engine toggle, undo, run-tests, export
     │   ├── V2Navigation.tsx    Six tab buttons
     │   ├── V2CreateModal.tsx   New-puzzle modal (size picker)
@@ -84,11 +86,12 @@ color       string
 id          string
 areaAId     string
 areaBId     string
-u           number     — position [0,1] along the shared perimeter
+u           number     — position along the shared perimeter; **clamped to [0.001, 0.999]** in geometry and UI (avoids endpoint bugs)
 isFlipped   boolean    — tab points toward areaA instead of areaB
 type        'TAB' | 'DOVETAIL' | 'SQUARE' | 'HEART' | 'NONE'
 size        number     — px
 isDormant   boolean
+clipOverlap? boolean   — Boolean engine: when true, subtract stamp from overlapping “third” pieces; when false, stamp is intersected with (owner ∪ neighbor) before booleans. **Topological engine: always treated as true** (UI checkbox disabled).
 midpoint?   {x,y}      — declared, not yet populated by solver
 isDeleted?  boolean    — set by collision fallback
 ```
@@ -107,30 +110,43 @@ The entire scene is a pure function of `(history[], width, height)`.
 
 ---
 
-## The 8-stage pipeline (`usePuzzleEngine.ts`)
+## The pipeline (`usePuzzleEngine.ts`)
 
-Each stage is a `useMemo`. Later stages depend on earlier ones.
+Stages are `useMemo`s (later stages depend on earlier ones). **Topology and merged groups are built in one ordered pass** over `history`: `SUBDIVIDE` updates the `areas` map; `MERGE` updates the DSU using **current** leaf geometry so order matches reality (merge-then-split and correct shared-edge tests).
 
 ```
 Stage 1  rootArea           Static {id:"root", boundary: full rect, isPiece:true}
-Stage 2  topology           SUBDIVIDE ops → Voronoi cells clipped to parent boundary
-Stage 3  mergedGroups       MERGE ops → Disjoint Set Union on leaf areas
-Stage 4  sharedEdges        O(n²) adjacency scan → edges for visualisation
-Stage 5  connectors         ADD_CONNECTOR ops → raw connector list
-Stage 6  resolvedConnectors Collision check → marks overlapping connectors isDeleted
-Stage 7  finalPieces        Geometry per merged group (Boolean OR Topological)
-Stage 8  finalPiecesWithConnectors  Boolean only: union/subtract connector stamps
+Stage 2  topology + mergedGroups   SUBDIVIDE → Voronoi cells; MERGE → DSU (interleaved in history order)
+Stage 3  sharedEdges        O(n²) adjacency scan → edges for visualisation
+Stage 4  connectors         ADD_CONNECTOR ops → raw connector list (u clamped; topo forces clipOverlap)
+Stage 5  booleanGeometry    BOOLEAN only: computeBooleanGeometry — collision resolve + base + cut + preview + overlays (single Paper lifecycle per update)
+Stage 6  resolvedConnectors Collision resolve embedded in booleanGeometry for BOOLEAN; TOPO: resetPaperProject + resolveCollisions
+Stage 7  finalPieces        BOOLEAN: base pieces from booleanGeometry; TOPO: TopologicalEngine + getMergedBoundary + Paper subtract stamps per rules
+Stage 8  finalPiecesWithConnectors / previewPieces  BOOLEAN: cutPieces / previewPieces from booleanGeometry; TOPO: same as finalPieces
+Stage 9  connectorOverlays  BOOLEAN: stamp overlays when tab not baked into path; TOPO: buildTopoConnectorStampOverlays (every connector drawn on top)
 ```
 
-**Critical bug fixed (2026-04-05):** `subdivide()` had `topology` missing from its `useCallback` deps, so the boundary computation used a stale closure. Fixed by adding `topology` to the dep array.
+The hook returns **`PuzzleEngineResult`** (`topology`, `mergedGroups`, `sharedEdges`, `connectors`, `resolvedConnectors`, `finalPieces`, `previewPieces`, `connectorOverlays`).
 
-**Voronoi bounds fixed (2026-04-05):** The Voronoi diagram was computed over `[0,0,W,H]` even when subdividing a small child area. It now uses the parent area's own bounding box so cells are tightly placed inside the target region.
+**SUBDIVIDE params (relevant):** `parentId`, `points`, `pattern`, optional **`clipBoundary`** (boolean union of merged leaves when splitting a merged group), optional **`absorbedLeafIds`** (other leaves in that merge group removed from the areas map after children are created). Built in `App.tsx` (`buildSubdivideOperation`).
+
+**Voronoi extent:** The diagram uses the **clipping** boundary’s bounding box (single parent or merged union), not always `[0,0,W,H]`.
+
+**Topological replay:** `MERGE` ops replay as `mergeFaces` on `TopologicalEngine`; if a face id no longer exists (e.g. after absorb), that merge is **skipped** — history and current leaf set must stay consistent.
+
+### Boolean engine (`boolean_connector_geometry.ts`)
+
+Used when **`geometryEngine === 'BOOLEAN'`**. **`computeBooleanGeometry`** runs one pipeline: `resetPaperProject` → collision resolution → base pieces → cut pieces (full union/subtract, optional third-piece subtract) → preview paths → connector stamp overlays (only where the tab is not already in the piece path). **`paperProject.ts`** replaces the active Paper project before `paper.setup` so dragging connector parameters does not accumulate orphan projects.
+
+### Topological engine (vs boolean)
+
+When **`geometryEngine === 'TOPOLOGICAL'`**, piece paths come from **`TopologicalEngine.getMergedBoundary`** with neighbor/third-piece subtracts using **`clipOverlap` always true**. Canvas **tab fills** are separate **SVG overlays** (`connectorOverlays`) so connectors always render **above** piece fills. The header toggle switches engines for comparison and workflow choice.
 
 ---
 
 ## Topological engine (`topology_engine.ts`)
 
-The preferred geometry backend. Represents the puzzle as a face-edge-vertex graph.
+Represents the puzzle as a face-edge-vertex graph (used when **`geometryEngine === 'TOPOLOGICAL'`**).
 
 ### Data structures
 ```
@@ -173,17 +189,18 @@ For each connector on an edge, the stamp (a raw path pointing rightward at the o
 
 ## `getSharedPerimeter` (geometry.ts) — critical function
 
-Used everywhere an adjacent pair of areas needs its shared edge.
+Used everywhere an adjacent pair of areas needs a **shared interface** chord (merge DSU, connector preview, boolean path).
 
-**Previous approach (buggy):** called `pathA.intersect(pathB)`. For exactly-adjacent Voronoi cells this produces a zero-area "double-edge sliver" (a closed path traversing the edge twice). The code tried to split it at `length/2` to get one traversal, but Paper.js assigns the starting vertex of the closed path arbitrarily — if it started mid-edge, the split landed at a corner, not the midpoint.
+**Not used:** `pathA.intersect(pathB)` as the primary boundary (it produced zero-area “double sliver” closed paths for adjacent cells).
 
-**Current approach (2026-04-05):** vertex matching.
-1. Iterate all segments of both boundary paths.
-2. Collect vertices from A that are within 1.5 px of any vertex in B.
-3. Take the pair with greatest distance (= the actual shared edge endpoints).
-4. Return a clean open path `M p1 L p2`.
+**Current approach:** build a set of **candidate points** on the shared interface, then return the **open** path `M p1 L p2` between the **two farthest** distinct points (chord). `getPointAtU` is arc length on that segment.
 
-This gives a path where `u=0 → p1`, `u=0.5 → geometric midpoint`, `u=1 → p2`, fixing the connector position discrepancy between the Boolean and Topological engines.
+1. **Vertex–vertex:** vertices of A within tolerance of vertices of B (≈1.5 px).
+2. **T-junctions / partial edges:** each vertex of A tested against every **segment** of B’s closed polygon (and vice versa). Catches corners that lie **on the interior** of the neighbor’s long edge (no matching vertex there).
+3. **Segment pairs:** collinear **overlap** endpoints; or proper **segment–segment intersection** when not parallel.
+4. Deduplicate nearby points; require at least two distinct points with separation > 1 px.
+
+This keeps connector `u` and merge adjacency consistent when subpieces only share a **sub-edge** of a neighbor (common after `SUBDIVIDE`).
 
 ---
 
@@ -193,7 +210,8 @@ This gives a path where `u=0 → p1`, `u=0.5 → geometric midpoint`, `u=1 → p
 | Function | Parameters | Notes |
 |---|---|---|
 | `generateGridPoints(W, H, rows, cols, jitter, bounds?)` | `bounds` overrides placement region | jitter not exposed in UI yet |
-| `generateHexPoints(W, H, size, jitter?)` | offset-column hex packing | |
+| `generateHexGridPoints(bounds, rows, cols, jitter?)` | lattice inside `bounds` | used by Topology “Hex lattice” split |
+| `generateHexPoints(W, H, size, jitter?)` | offset-column hex packing | still in file; UI uses `generateHexGridPoints` |
 
 ### `createConnectorStamp(anchor, normal, type, size, midpointOffset?, overlap?)`
 Builds the tab shape as a Paper.js Path centred at origin pointing right.
@@ -231,10 +249,20 @@ Offers presets: Square 600×600, A4 landscape/portrait, 4:3 800×600, 16:9 960×
 Custom W×H inputs (100–4000 px). Dismissed via "Create Puzzle" → sets `width`/`height` state.
 
 ### ActionBar — Topology tab
-- **Row 1:** Grid (rows × cols + Split), Hex (size + Split), Random (count + Split)
-- **Row 2 (when area selected):** area ID, leaf/children status
-- Split buttons are **disabled** unless an area is selected AND `isPiece === true`.
-- Splitting always targets the selected area; root can only be split once (it becomes non-leaf).
+- **Split:** dropdown (**Grid** / **Hex lattice** / **Random**), size inputs (grid rows×cols, hex rows×cols, or random point count), then **Split**.
+- **Merge / Delete:** short instructions; **Merge** chains `MERGE` for all picked pieces (≥2). **Delete piece** merges the target with **all neighbors** (same as repeated merges along the boundary).
+- **Selection:** tap a **display piece** to toggle it in the selection set; tap again to remove. **Split** runs **one `SUBDIVIDE` per selected leaf** (batched in history). After **split, merge, or delete**, selection is **cleared** so stale ids (e.g. parents after a split) do not block the next action.
+- Split is enabled when at least one piece is selected and **every** selected id is a leaf (`isPiece`).
+- Merged-group split uses union **clip** and seed **bounds** from the merged geometry (see `buildSubdivideOperation` in `App.tsx`).
+
+### V2Canvas — Production tab
+Piece paths are drawn as **stroke-only contours** (laser-oriented). **No** connector overlay layer (cut geometry is authoritative).
+
+### V2Canvas — connector overlays (Connection / Resolution / etc., not Production)
+**Boolean:** tab-shaped fills above pieces when `clipOverlap` is off; when on, the tab is baked into preview paths and overlays are omitted for those connectors. **Topological:** every connector gets a stamp overlay so the tab is always **on top** of piece fills.
+
+### V2Canvas — selection (Topology)
+Selected pieces use a **violet multiply overlay**, **thick indigo stroke**, and a light **SVG glow** filter so selection is obvious on any fill colour.
 
 ### V2Canvas — zoom/pan
 - **Scroll wheel** → pan (non-passive, `preventDefault` to avoid page scroll)
@@ -251,12 +279,12 @@ Custom W×H inputs (100–4000 px). Dismissed via "Create Puzzle" → sets `widt
 
 | Tab | Row 1 controls | Selection row behaviour |
 |---|---|---|
-| TOPOLOGY | Grid/Hex/Random split buttons | Area info; split buttons disabled if area already has children |
-| MODIFICATION | "Click two areas to merge" hint | Merge button for selected area |
+| TOPOLOGY | Split pattern + sizes + Split; merge/delete hints + actions | Area id, leaf status, delete piece when applicable |
+| MODIFICATION | Placeholder label | — |
 | CONNECTION | "Click edges to add tabs" hint | Connector editor (pos, size, flip, delete) |
 | RESOLUTION | (empty) | Connector editor |
 | TRANSFORMATION | (placeholder) | — |
-| PRODUCTION | Export SVG button | — |
+| PRODUCTION | **Export SVG** — `puzzle-cut.svg`: stroke-only paths from hook `finalPieces` (boolean = cut booleans; topo = merged boundaries with connector subtracts). No tab overlay on canvas. | — |
 
 ---
 
@@ -264,13 +292,15 @@ Custom W×H inputs (100–4000 px). Dismissed via "Create Puzzle" → sets `widt
 
 All tests run headlessly against Paper.js in Node (no DOM needed).
 
-| File | Tests | Covers |
-|---|---|---|
-| `src/v2/merge_repro.test.ts` | 4 | 3×3 rect grid merge area, hex grid merge area, connector integration, T-junction |
-| `src/v2/topological_engine.test.ts` | 1 | Hex grid with connectors — total area conservation + no holes in union |
-| `src/tests/geometry.test.ts` | 3 | v1 whimsy path helpers (legacy) |
+| File | Covers |
+|---|---|
+| `src/v2/merge_repro.test.ts` | Rect/hex merge area, connector on boundary, T-junction scenario, Voronoi clip |
+| `src/v2/topological_engine.test.ts` | Hex grid + connectors — area conservation |
+| `src/v2/getSharedPerimeter.test.ts` | T-junction: subpiece vertices on interior of neighbor edge |
+| `src/v2/boolean_connector_geometry.test.ts` | Boolean stamps, clip-overlap vs pre-clip, grid third-piece behaviour |
+| `src/tests/geometry.test.ts` | v1 whimsy path helpers (legacy) |
 
-Run with `npm test`. All 8 pass as of 2026-04-05.
+Run with `npm test`.
 
 ---
 
@@ -284,7 +314,7 @@ Run with `npm test`. All 8 pass as of 2026-04-05.
 | Whimsy areas | Type enum exists; no generation or clipping logic implemented |
 | Point distribution | Poisson-disc, spiral, manual placement — not implemented |
 | Spatial transforms | Tab exists; no conformal/polar mapping |
-| SVG export | Production tab button exists; no actual export logic |
+| SVG export | **Basic export implemented** — stroke-only paths from `finalPieces`; kerf / layers / single-edge walk still future (`03_next_steps.md` Phase 6) |
 | `MERGE_AREAS` op type | Declared alongside `MERGE` — appears to be a duplicate, should be removed |
 | Shared-edge scan | O(n²); gated at 200 pieces; no spatial index |
 | Determinism | `RANDOM` pattern uses `Math.random()` — not seeded |

@@ -1,7 +1,7 @@
 import React from 'react';
-import { Grid, Hexagon, Shuffle, Link as LinkIcon, Download, RefreshCw, Trash2, X, Layers, Merge } from 'lucide-react';
+import { Grid, Hexagon, Shuffle, Link as LinkIcon, Download, RefreshCw, Trash2, X, Layers, Merge, Circle, Star, Sparkles } from 'lucide-react';
 import { Tab } from '../constants';
-import { Connector } from '../types';
+import { Connector, WhimsyTemplateId } from '../types';
 
 interface V2ActionBarProps {
   activeTab: Tab;
@@ -29,6 +29,18 @@ interface V2ActionBarProps {
   onUpdateConnector: (id: string, updates: Partial<Connector>) => void;
   onDeleteOperation: (id: string) => void;
   onClearSelection: () => void;
+  /** Production tab: download cut-ready SVG (full boolean geometry). */
+  onExportSvg?: () => void;
+  geometryEngine?: 'BOOLEAN' | 'TOPOLOGICAL';
+  whimsyTemplate: WhimsyTemplateId;
+  setWhimsyTemplate: (t: WhimsyTemplateId) => void;
+  whimsyScale: number;
+  setWhimsyScale: (v: number) => void;
+  whimsyRotationDeg: number;
+  setWhimsyRotationDeg: (v: number) => void;
+  whimsyPlacementActive: boolean;
+  startWhimsyPlacement: () => void;
+  cancelWhimsyPlacement: () => void;
 }
 
 const Label: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -72,6 +84,17 @@ export const V2ActionBar: React.FC<V2ActionBarProps> = ({
   onUpdateConnector,
   onDeleteOperation,
   onClearSelection,
+  onExportSvg,
+  geometryEngine = 'TOPOLOGICAL',
+  whimsyTemplate,
+  setWhimsyTemplate,
+  whimsyScale,
+  setWhimsyScale,
+  whimsyRotationDeg,
+  setWhimsyRotationDeg,
+  whimsyPlacementActive,
+  startWhimsyPlacement,
+  cancelWhimsyPlacement,
 }) => {
   const runSplit = () => {
     if (canSubdivide) subdivideSelectedPieces();
@@ -139,6 +162,67 @@ export const V2ActionBar: React.FC<V2ActionBarProps> = ({
 
             <Divider />
 
+            <div className="flex items-center gap-2 flex-wrap shrink-0">
+              <Label>Whimsy</Label>
+              <button
+                type="button"
+                onClick={() => setWhimsyTemplate('circle')}
+                title="Circle template (radius × scale in px)"
+                className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[10px] font-bold transition-all ${
+                  whimsyTemplate === 'circle'
+                    ? 'bg-violet-100 border-violet-400 text-violet-800'
+                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:border-violet-300'
+                }`}
+              >
+                <Circle className="w-3 h-3" />
+                Circle
+              </button>
+              <button
+                type="button"
+                onClick={() => setWhimsyTemplate('star')}
+                title="5-point star"
+                className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[10px] font-bold transition-all ${
+                  whimsyTemplate === 'star'
+                    ? 'bg-violet-100 border-violet-400 text-violet-800'
+                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:border-violet-300'
+                }`}
+              >
+                <Star className="w-3 h-3" />
+                Star
+              </button>
+              <Label>Scale</Label>
+              <NumberInput value={whimsyScale} onChange={setWhimsyScale} min={8} max={800} width="w-12" />
+              <Label>Rot°</Label>
+              <NumberInput value={whimsyRotationDeg} onChange={setWhimsyRotationDeg} min={-360} max={360} width="w-12" />
+              {!whimsyPlacementActive ? (
+                <button
+                  type="button"
+                  onClick={startWhimsyPlacement}
+                  title="Preview follows the cursor; click on the puzzle to cut all overlapping pieces"
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg shrink-0 bg-violet-600 text-white text-[10px] font-bold uppercase hover:bg-violet-500"
+                >
+                  <Sparkles className="w-3 h-3 opacity-90" />
+                  Add whimsy
+                </button>
+              ) : (
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-[9px] text-violet-700 font-semibold max-w-[140px] leading-tight">
+                    Move over puzzle · click to place · Esc
+                  </span>
+                  <button
+                    type="button"
+                    onClick={cancelWhimsyPlacement}
+                    title="Escape also cancels"
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg shrink-0 bg-slate-200 text-slate-800 text-[10px] font-bold uppercase hover:bg-slate-300"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <Divider />
+
             <div className="flex items-center gap-2 flex-wrap min-w-0">
               <div className="flex items-center gap-2 px-3 py-1.5 text-amber-700 bg-amber-50 rounded-xl shrink-0 max-w-[min(100%,420px)]">
                 <Merge className="w-3.5 h-3.5 shrink-0" />
@@ -197,7 +281,11 @@ export const V2ActionBar: React.FC<V2ActionBarProps> = ({
         )}
 
         {activeTab === 'PRODUCTION' && (
-          <button type="button" className="px-6 py-2 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-500 transition-all flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onExportSvg?.()}
+            className="px-6 py-2 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-500 transition-all flex items-center gap-2"
+          >
             <Download className="w-3.5 h-3.5" /> Export SVG
           </button>
         )}
@@ -249,7 +337,7 @@ export const V2ActionBar: React.FC<V2ActionBarProps> = ({
               <div className="flex items-center gap-3 min-w-[160px]">
                 <Label>Pos</Label>
                 <input
-                  type="range" min="0" max="1" step="0.01"
+                  type="range" min="0.001" max="0.999" step="0.001"
                   value={selectionData?.u || 0}
                   onChange={e => onUpdateConnector(selectedId, { u: Number(e.target.value) })}
                   className="flex-1 h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-emerald-500"
@@ -283,6 +371,29 @@ export const V2ActionBar: React.FC<V2ActionBarProps> = ({
                 <RefreshCw size={12} />
                 <span className="text-[10px] font-bold uppercase">Flip</span>
               </button>
+              <label
+                className={`flex items-center gap-1.5 text-[10px] select-none shrink-0 ${
+                  geometryEngine === 'TOPOLOGICAL' ? 'text-slate-400 cursor-default' : 'text-slate-600 cursor-pointer'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 disabled:opacity-60"
+                  disabled={geometryEngine === 'TOPOLOGICAL'}
+                  checked={geometryEngine === 'TOPOLOGICAL' ? true : !!selectionData?.clipOverlap}
+                  onChange={e => onUpdateConnector(selectedId, { clipOverlap: e.target.checked })}
+                />
+                <span
+                  className="font-medium max-w-[140px] leading-tight"
+                  title={
+                    geometryEngine === 'TOPOLOGICAL'
+                      ? 'Topological mode always clips overlapping third pieces; tab is drawn on top of pieces.'
+                      : 'When enabled, subtract the stamp from overlapping third pieces in the cut geometry (Boolean).'
+                  }
+                >
+                  Clip overlapping pieces
+                </span>
+              </label>
               <button
                 type="button"
                 onClick={() => onDeleteOperation(selectedId)}

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import paper from 'paper';
 import { TopologicalEngine } from './topology_engine';
 import { Delaunay } from 'd3-delaunay';
+import { getSharedPerimeter, getPointAtU } from './geometry';
 
 describe('TopologicalEngine 3x3 Grid Merge', () => {
   let engine: TopologicalEngine;
@@ -241,5 +242,98 @@ describe('TopologicalEngine 3x3 Grid Merge', () => {
     expect(Math.abs(path.area)).toBeCloseTo(width * height, 1);
     path.remove();
     rootPath.remove();
+  });
+
+  it('3x3 Voronoi grid: connector at chord u=0 and u=1 maps to chain endpoints (middle cell vs right neighbor)', () => {
+    const width = 300;
+    const height = 300;
+    const points: [number, number][] = [];
+    for (let y = 50; y < 300; y += 100) {
+      for (let x = 50; x < 300; x += 100) {
+        points.push([x, y]);
+      }
+    }
+
+    const delaunay = Delaunay.from(points);
+    const voronoi = delaunay.voronoi([0, 0, width, height]);
+
+    paper.setup(new paper.Size(width, height));
+    const rootPath = new paper.Path.Rectangle(new paper.Point(0, 0), new paper.Size(width, height));
+
+    const areas = points.map((p, i) => {
+      const poly = voronoi.cellPolygon(i);
+      const cellPath = new paper.Path();
+      poly.forEach((pt, j) => {
+        if (j === 0) cellPath.moveTo(new paper.Point(pt[0], pt[1]));
+        else cellPath.lineTo(new paper.Point(pt[0], pt[1]));
+      });
+      cellPath.closePath();
+
+      const clipped = rootPath.intersect(cellPath);
+      const boundary = clipped.pathData;
+      cellPath.remove();
+      const res = {
+        id: `cell-${i}`,
+        boundary,
+        seedPoint: { x: p[0], y: p[1] },
+        color: '#ff0000',
+      };
+      clipped.remove();
+      return res;
+    });
+    rootPath.remove();
+
+    const engine = new TopologicalEngine();
+    engine.initializeFromVoronoi(areas, width, height);
+
+    const middleId = 'cell-4';
+    const rightId = 'cell-5';
+    const a = areas[4];
+    const b = areas[5];
+
+    const shared = getSharedPerimeter(a as any, b as any);
+    expect(shared).not.toBeNull();
+
+    const stamp = 'M 0 -2 L 4 -2 L 4 2 L 0 2 Z';
+
+    const chordPath = shared! as paper.Path;
+    const chordEnd0 = chordPath.firstSegment.point;
+    const chordEnd1 = chordPath.lastSegment.point;
+
+    /** Connector `u` on an edge segment must match the chord anchor (same as boolean preview). */
+    const expectAnchorMatchesChord = (chordU: number) => {
+      engine.edges.forEach(e => {
+        e.connectors = undefined;
+      });
+      const expected = getPointAtU(shared!, chordU)!.point;
+      engine.addConnectorAtAnchor(
+        middleId,
+        rightId,
+        expected,
+        stamp,
+        false,
+        middleId,
+        chordU,
+        chordEnd0,
+        chordEnd1
+      );
+      let dist = Infinity;
+      engine.edges.forEach(e => {
+        if (!e.connectors?.length) return;
+        const c = e.connectors[0];
+        const v1 = engine.vertices.get(e.v1Id)!.point;
+        const v2 = engine.vertices.get(e.v2Id)!.point;
+        const placed = v1.add(v2.subtract(v1).multiply(c.u));
+        const d = placed.getDistance(expected);
+        if (d < dist) dist = d;
+      });
+      expect(dist).toBeLessThan(0.5);
+    };
+
+    expectAnchorMatchesChord(0);
+    expectAnchorMatchesChord(1);
+    // Single-segment interfaces often map chord u=0 / u=1 to local t=1 / t=0 when the chord
+    // is oriented opposite to the topo chain; that is still correct if the anchor matches.
+    shared!.remove();
   });
 });

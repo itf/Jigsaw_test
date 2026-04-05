@@ -1,5 +1,6 @@
 import paper from 'paper';
 import { Point } from './types';
+import { pathItemFromBoundaryData, resetPaperProject } from './paperProject';
 
 /**
  * A Topological Graph represents the puzzle as a collection of shared edges and faces.
@@ -50,14 +51,14 @@ export class TopologicalEngine {
     this.edges.clear();
     this.faces.clear();
 
-    paper.setup(new paper.Size(width, height));
+    resetPaperProject(width, height);
 
     // 1. Extract all segments from all paths
     const rawSegments: { p1: paper.Point; p2: paper.Point; faceId: string }[] = [];
     const allPoints: paper.Point[] = [];
 
     leafAreas.forEach(area => {
-      const path = new paper.Path(area.boundary);
+      const path = pathItemFromBoundaryData(area.boundary);
       const children = path instanceof paper.CompoundPath ? path.children : [path];
       
       children.forEach(child => {
@@ -239,10 +240,46 @@ export class TopologicalEngine {
     return sorted.length === edgeIds.length ? sorted : [...edgeIds];
   }
 
+  /** Geometry of the two degree-1 vertices of an open chain of edges (shared interface between two faces). */
+  private getOpenChainEndpoints(sortedEdgeIds: string[]): { start: paper.Point; end: paper.Point } | null {
+    if (sortedEdgeIds.length === 0) return null;
+    const touchCount = new Map<string, number>();
+    sortedEdgeIds.forEach(eid => {
+      const e = this.edges.get(eid)!;
+      touchCount.set(e.v1Id, (touchCount.get(e.v1Id) || 0) + 1);
+      touchCount.set(e.v2Id, (touchCount.get(e.v2Id) || 0) + 1);
+    });
+    let startV: string | null = null;
+    for (const [v, c] of touchCount) {
+      if (c === 1) {
+        startV = v;
+        break;
+      }
+    }
+    const e0 = this.edges.get(sortedEdgeIds[0])!;
+    if (!startV) startV = e0.v1Id;
+
+    let currentV = startV;
+    for (const eid of sortedEdgeIds) {
+      const e = this.edges.get(eid)!;
+      currentV = e.v1Id === currentV ? e.v2Id : e.v1Id;
+    }
+    const endV = currentV;
+    return {
+      start: this.vertices.get(startV)!.point,
+      end: this.vertices.get(endV)!.point,
+    };
+  }
+
   /**
    * Places a connector on the shared polyline at the point closest to `anchor`.
    * Use this when `anchor` comes from `getSharedPerimeter` + `getPointAtU` so the
    * topological cut matches the boolean engine and Connection-tab preview.
+   *
+   * `chordU` is the same [0,1] parameter passed to `getPointAtU` on the shared chord.
+   * When the anchor lies on a vertex shared by two chain segments (common at u=0 or u=1),
+   * projection distance ties; we break ties by preferring the segment whose arc position
+   * matches `chordU * totalChainLength` so the stamp does not attach to the wrong edge.
    */
   addConnectorAtAnchor(
     faceAId: string,
@@ -250,18 +287,47 @@ export class TopologicalEngine {
     anchor: paper.Point,
     stampPathData: string,
     isFlipped: boolean,
-    ownerFaceId: string
+    ownerFaceId: string,
+    chordU: number = 0.5,
+    /** Endpoints of the shared chord from `getSharedPerimeter` (firstSegment → lastSegment, same order as `getPointAtU`). Used to align chord parameter with polyline chain direction. */
+    chordEnd0?: paper.Point,
+    chordEnd1?: paper.Point
   ) {
     let edgeIds = this.findEdgesBetweenFaces(faceAId, faceBId);
     if (edgeIds.length === 0) return;
 
     edgeIds = this.sortSharedEdgesAsChain(edgeIds);
 
-    let bestDist = Infinity;
-    let bestEid = '';
-    let bestLocalU = 0;
+    const DIST_TIE_EPS = 1e-3;
+    const edgeLengths = edgeIds.map(eid => {
+      const edge = this.edges.get(eid)!;
+      const v1 = this.vertices.get(edge.v1Id)!.point;
+      const v2 = this.vertices.get(edge.v2Id)!.point;
+      return v1.getDistance(v2);
+    });
+    const totalLength = edgeLengths.reduce((a, b) => a + b, 0);
 
-    for (const eid of edgeIds) {
+    const chainEnds = this.getOpenChainEndpoints(edgeIds);
+    let targetArc = totalLength > 0 ? Math.max(0, Math.min(1, chordU)) * totalLength : 0;
+    if (
+      chainEnds &&
+      totalLength > 0 &&
+      chordEnd0 &&
+      chordEnd1 &&
+      !chordEnd0.equals(chordEnd1)
+    ) {
+      const dAlign = chordEnd0.getDistance(chainEnds.start) + chordEnd1.getDistance(chainEnds.end);
+      const dFlip = chordEnd0.getDistance(chainEnds.end) + chordEnd1.getDistance(chainEnds.start);
+      const u = Math.max(0, Math.min(1, chordU));
+      targetArc = (dAlign <= dFlip ? u : 1 - u) * totalLength;
+    }
+
+    type Cand = { eid: string; t: number; dist: number; arcPos: number };
+    const cands: Cand[] = [];
+    let cumulative = 0;
+
+    for (let i = 0; i < edgeIds.length; i++) {
+      const eid = edgeIds[i];
       const edge = this.edges.get(eid)!;
       const v1 = this.vertices.get(edge.v1Id)!.point;
       const v2 = this.vertices.get(edge.v2Id)!.point;
@@ -272,18 +338,27 @@ export class TopologicalEngine {
       const t = Math.max(0, Math.min(1, anchor.subtract(v1).dot(vec) / lenSq));
       const closest = v1.add(vec.multiply(t));
       const d = anchor.getDistance(closest);
-      if (d < bestDist) {
-        bestDist = d;
-        bestEid = eid;
-        bestLocalU = t;
-      }
+      const len = edgeLengths[i];
+      const arcPos = cumulative + t * len;
+      cumulative += len;
+
+      cands.push({ eid, t, dist: d, arcPos });
     }
 
-    if (!bestEid) return;
+    if (cands.length === 0) return;
 
-    const edge = this.edges.get(bestEid)!;
+    const minDist = Math.min(...cands.map(c => c.dist));
+    const close = cands.filter(c => c.dist <= minDist + DIST_TIE_EPS);
+    const pick =
+      close.length === 1
+        ? close[0]
+        : close.reduce((best, c) =>
+            Math.abs(c.arcPos - targetArc) < Math.abs(best.arcPos - targetArc) ? c : best
+          );
+
+    const edge = this.edges.get(pick.eid)!;
     if (!edge.connectors) edge.connectors = [];
-    edge.connectors.push({ u: bestLocalU, stampPathData, isFlipped, ownerFaceId });
+    edge.connectors.push({ u: pick.t, stampPathData, isFlipped, ownerFaceId });
   }
 
   /**

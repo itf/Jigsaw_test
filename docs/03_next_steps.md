@@ -12,20 +12,26 @@ Items within a phase are roughly ordered by dependency.
 
 ---
 
-## Already Done (as of 2026-04-05)
+## Already Done (as of 2026-04-06)
 
 These items were originally in the backlog and are now complete:
 
 - [x] Two-row action bar (selection row never overlaps tab controls)
 - [x] Puzzle size specified via creation modal (not derived from window size)
-- [x] Split buttons target the selected area only; disabled when no selection or area has children
-- [x] Voronoi extent uses parent area's bounding box (not the full puzzle) for sub-area subdivision
-- [x] `subdivide` useCallback has `topology` in its deps array (fixes stale closure)
+- [x] Voronoi extent uses the **subdivide clipping** region’s bounding box (parent or merged union), not the full puzzle
 - [x] Pan clamping: 120 px margin keeps puzzle always partially in viewport
-- [x] Zoom slider + drag-to-pan; scroll wheel = pan only (not zoom); mobile = no custom behavior
-- [x] `getSharedPerimeter` rewritten with vertex matching — fixes `u=0.5` landing at a corner
+- [x] Zoom slider + drag-to-pan; scroll wheel = pan only (not zoom)
+- [x] `getSharedPerimeter`: vertex matching **plus** T-junction / vertex-on-edge / segment overlap — fixes merge and connectors when only a **sub-edge** is shared
+- [x] **Unified history replay** in `usePuzzleEngine`: topology + DSU from one ordered pass; `SUBDIVIDE` supports `clipBoundary` + `absorbedLeafIds` for splitting merged groups
+- [x] **Topology UX:** merge + split + delete on Topology tab; split pattern **dropdown** (grid / hex lattice / random); **tap to toggle** selection; **multi-split**; clear selection after operations; stronger **selected-piece** styling on canvas
 - [x] Vitest environment changed from `jsdom` to `node` (avoids `@exodus/bytes` ESM/CJS conflict)
-- [x] `docs/01_current_state.md`, `docs/02_design_doc.md`, `docs/03_next_steps.md` created
+- [x] `docs/01_current_state.md`, `docs/02_design_doc.md`, `docs/03_next_steps.md`, `docs/04_v2_implementation_context.md` maintained
+- [x] **Boolean geometry pipeline** — `computeBooleanGeometry`, `boolean_connector_geometry.ts`, collision resolve folded into one Paper lifecycle; `paperProject.resetPaperProject` to limit leaks
+- [x] **Dual-engine UX** — header toggle BOOLEAN vs TOPOLOGICAL; each path documented in `04_v2_implementation_context.md`
+- [x] **Connector `u`** — clamped to `[0.001, 0.999]` (`clampConnectorU`, sliders)
+- [x] **Clip semantics** — boolean: `clipOverlap` off ⇒ pre-intersect stamp with owner∪neighbor; on ⇒ third-piece subtract; topo: always clip-on; topo **stamp overlays** always drawn on top of piece fills
+- [x] **Production tab** — stroke-only canvas preview; SVG export of stroke contours; no connector overlay on Production
+- [x] **Tests** — `boolean_connector_geometry.test.ts` (Vitest total 26 tests as of 2026-04)
 
 ---
 
@@ -35,7 +41,7 @@ These items fix correctness gaps in the already-implemented topology pipeline be
 
 ### 1.1 Seed all random patterns  (S)
 
-**Problem**: `Math.random()` is called in `generateGridPoints`, `generateHexPoints`, and the RANDOM pattern, so the same history produces different geometry on replay.  
+**Problem**: `Math.random()` is called in `generateGridPoints`, `generateHexGridPoints` / `generateHexPoints`, and the RANDOM pattern, so the same history produces different geometry on replay.  
 **Fix**: Add a `seed` field to each `SUBDIVIDE` operation and pass it to a seeded PRNG (e.g. mulberry32 or xoshiro128 implemented in `src/shared/utils.ts`). Use the seed for jitter and random point placement.  
 **Files**: `src/v2/geometry.ts`, `src/v2/hooks/usePuzzleEngine.ts`, `src/shared/utils.ts`
 
@@ -171,9 +177,11 @@ Tab 5 shows a picker for transform type and parameters (scale, centre, rotation)
 
 ## Phase 6 · Production Export
 
+**Done (minimal):** stroke-only SVG download from `finalPieces` (`App.tsx` `exportCutSvg`). Canvas on Production tab shows contours only.
+
 ### 6.1 Single-path extraction  (M)
 
-Walk the edge graph. Each edge that is a boundary edge (one adjacent face) is emitted once as a cut path. Internal edges (two adjacent faces) are emitted as score or engrave paths if desired. Output as a flat SVG `<path>` with no fills.  
+Walk the edge graph. Each edge that is a boundary edge (one adjacent face) is emitted once as a cut path. Internal edges (two adjacent faces) are emitted as score or engrave paths if desired. Current export is one path **per piece** (may duplicate shared edges until this is implemented).  
 **Files**: `src/v2/topology_engine.ts`, `src/v2/components/V2ActionBar.tsx`
 
 ### 6.2 Kerf compensation  (S)
@@ -191,13 +199,15 @@ Emit an SVG file with named `<g>` layers: `outer-boundary`, `internal-cuts`, `wh
 ### Current test suite
 
 ```
-npm test   # 8 tests pass (as of 2026-04-05)
+npm test   # 26 tests (as of 2026-04)
 ```
 
 | File | Tests | Status |
 |---|---|---|
 | `src/v2/merge_repro.test.ts` | 4 | Passing |
 | `src/v2/topological_engine.test.ts` | 1 | Passing |
+| `src/v2/boolean_connector_geometry.test.ts` | 15 | Passing |
+| `src/v2/getSharedPerimeter.test.ts` | 1+ | Passing |
 | `src/tests/geometry.test.ts` | 3 | Passing (legacy v1) |
 
 ### New unit tests to add

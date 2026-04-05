@@ -1,11 +1,13 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import paper from 'paper';
 
-import { Point, AreaType, Connector, Operation } from './types';
-import { generateGridPoints, generateHexGridPoints } from './geometry';
+import { Point, Connector, Operation, CreateRootShape, WhimsyTemplateId } from './types';
+import { generateGridPoints, generateHexGridPoints, clampConnectorU, resolveSubdivideClipBoundary } from './geometry';
 import { useLongPress } from '../v1/hooks/useLongPress';
 
 import { usePuzzleEngine } from './hooks/usePuzzleEngine';
+import { pathItemFromBoundaryData, resetPaperProject } from './paperProject';
+import { buildWhimsyStencilPathData } from './whimsy_cut';
 import { V2Header } from './components/V2Header';
 import { V2Navigation } from './components/V2Navigation';
 import { V2ActionBar } from './components/V2ActionBar';
@@ -30,6 +32,7 @@ export default function V2App() {
   const [showCreateModal, setShowCreateModal] = useState(true);
   const [width, setWidth] = useState(800);
   const [height, setHeight] = useState(600);
+  const [initialShape, setInitialShape] = useState<CreateRootShape>({ variant: 'rect' });
   const [containerSize, setContainerSize] = useState({ w: window.innerWidth, h: window.innerHeight - 168 });
   const [history, setHistory] = useState<Operation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -43,6 +46,12 @@ export default function V2App() {
   const [randomPoints, setRandomPoints] = useState(12);
   const [splitPattern, setSplitPattern] = useState<'GRID' | 'HEX' | 'RANDOM'>('GRID');
   const [mergePickIds, setMergePickIds] = useState<string[]>([]);
+
+  const [whimsyTemplate, setWhimsyTemplate] = useState<WhimsyTemplateId>('circle');
+  const [whimsyScale, setWhimsyScale] = useState(56);
+  const [whimsyRotationDeg, setWhimsyRotationDeg] = useState(0);
+  const [whimsyPlacementActive, setWhimsyPlacementActive] = useState(false);
+  const [whimsyPreviewCenter, setWhimsyPreviewCenter] = useState<Point>({ x: 400, y: 300 });
 
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [hoveredType, setHoveredType] = useState<'AREA' | 'CONNECTOR' | 'EDGE' | 'NONE'>('NONE');
@@ -75,15 +84,64 @@ export default function V2App() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  useEffect(() => {
+    if (!whimsyPlacementActive) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setWhimsyPlacementActive(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [whimsyPlacementActive]);
+
+  useEffect(() => {
+    if (whimsyPlacementActive) {
+      setWhimsyPreviewCenter({ x: width / 2, y: height / 2 });
+    }
+  }, [whimsyPlacementActive, width, height]);
+
+  const whimsyPreviewPathData = useMemo(
+    () =>
+      buildWhimsyStencilPathData(whimsyTemplate, whimsyPreviewCenter, whimsyScale, whimsyRotationDeg, width, height),
+    [whimsyTemplate, whimsyPreviewCenter, whimsyScale, whimsyRotationDeg, width, height]
+  );
+
   // --- Engine Hook ---
   const {
     topology,
     mergedGroups,
+    whimsyWarnings,
     sharedEdges,
     connectors,
     resolvedConnectors,
-    finalPieces
-  } = usePuzzleEngine({ width, height, history, activeTab, geometryEngine });
+    finalPieces,
+    previewPieces,
+    connectorOverlays,
+  } = usePuzzleEngine({ width, height, initialShape, history, activeTab, geometryEngine });
+
+  const canvasPieces = activeTab === 'PRODUCTION' ? finalPieces : previewPieces;
+  /** Production: cut contours only. Boolean/topo: tab stamps above pieces when not on Production. */
+  const canvasConnectorOverlays =
+    activeTab !== 'PRODUCTION' && (geometryEngine === 'BOOLEAN' || geometryEngine === 'TOPOLOGICAL')
+      ? connectorOverlays
+      : [];
+
+  const exportCutSvg = useCallback(() => {
+    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+    const body = finalPieces
+      .map(
+        p =>
+          `<path d="${esc(p.pathData)}" fill="none" stroke="${esc(p.color)}" stroke-width="0.35" stroke-linejoin="round" fill-rule="evenodd"/>`
+      )
+      .join('\n');
+    const svg = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${body}</svg>`;
+    const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'puzzle-cut.svg';
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [width, height, finalPieces]);
 
   // --- Actions ---
   const mergeAreas = useCallback((areaAId: string, areaBId: string) => {
@@ -142,15 +200,14 @@ export default function V2App() {
     let clipBoundary: string | undefined;
     let absorbedLeafIds: string[] | undefined;
 
-    paper.setup(new paper.Size(width, height));
+    resetPaperProject(width, height);
 
     if (groupMembers.length > 1) {
       let mergedPath: paper.PathItem | null = null;
       groupMembers.forEach(id => {
         const area = topology[id];
         if (!area) return;
-        const path = new paper.Path(area.boundary);
-        path.clockwise = true;
+        const path = pathItemFromBoundaryData(area.boundary);
         if (!mergedPath) {
           mergedPath = path;
         } else {
@@ -163,19 +220,19 @@ export default function V2App() {
       if (mergedPath) {
         const cleaned = (mergedPath as paper.PathItem).reduce({ insert: false }) as paper.PathItem;
         cleaned.reorient(true, true);
-        clipBoundary = cleaned.pathData;
-        const ub = cleaned.bounds;
-        bounds = { x: ub.x, y: ub.y, width: ub.width, height: ub.height };
+        const resolved = resolveSubdivideClipBoundary(cleaned, width, height);
+        clipBoundary = resolved.clipPathData;
+        bounds = resolved.bounds;
         cleaned.remove();
       } else {
-        const path0 = new paper.Path(parent.boundary);
+        const path0 = pathItemFromBoundaryData(parent.boundary);
         const b = path0.bounds;
         bounds = { x: b.x, y: b.y, width: b.width, height: b.height };
         path0.remove();
       }
       absorbedLeafIds = groupMembers.filter(id => id !== parentId);
     } else {
-      const path0 = new paper.Path(parent.boundary);
+      const path0 = pathItemFromBoundaryData(parent.boundary);
       const b = path0.bounds;
       bounds = { x: b.x, y: b.y, width: b.width, height: b.height };
       path0.remove();
@@ -202,6 +259,28 @@ export default function V2App() {
       timestamp: Date.now()
     };
   }, [topology, mergedGroups, width, height, gridRows, gridCols, randomPoints, hexRows, hexCols]);
+
+  const commitWhimsyAt = useCallback(
+    (center: Point) => {
+      const op: Operation = {
+        id: `whimsy-${Date.now()}`,
+        type: 'ADD_WHIMSY',
+        params: {
+          templateId: whimsyTemplate,
+          center,
+          scale: whimsyScale,
+          rotationDeg: whimsyRotationDeg,
+        },
+        timestamp: Date.now(),
+      };
+      setHistory(prev => [...prev, op]);
+      setWhimsyPlacementActive(false);
+      setMergePickIds([]);
+      setSelectedId(null);
+      setSelectedType('NONE');
+    },
+    [whimsyTemplate, whimsyScale, whimsyRotationDeg]
+  );
 
   const subdivideSelectedPieces = useCallback(() => {
     const targets = mergePickIds.filter(id => topology[id]?.isPiece);
@@ -234,7 +313,7 @@ export default function V2App() {
     const op: Operation = {
       id: `connector-${Date.now()}`,
       type: 'ADD_CONNECTOR',
-      params: { areaAId, areaBId, u, type: 'TAB', size: 20, isFlipped: false },
+      params: { areaAId, areaBId, u: clampConnectorU(u), type: 'TAB', size: 20, isFlipped: false, clipOverlap: false },
       timestamp: Date.now()
     };
     setHistory(prev => [...prev, op]);
@@ -245,7 +324,9 @@ export default function V2App() {
   const updateConnector = useCallback((id: string, updates: Partial<Connector>) => {
     setHistory(prev => prev.map(op => {
       if (op.id === id && op.type === 'ADD_CONNECTOR') {
-        return { ...op, params: { ...op.params, ...updates } };
+        const params = { ...op.params, ...updates };
+        if (updates.u !== undefined) params.u = clampConnectorU(params.u);
+        return { ...op, params };
       }
       return op;
     }));
@@ -299,6 +380,11 @@ export default function V2App() {
   const canSubdivideTopology =
     mergePickIds.length > 0 && mergePickIds.every(id => topology[id]?.isPiece);
 
+  const [whimsyBannerHidden, setWhimsyBannerHidden] = useState(false);
+  useEffect(() => {
+    setWhimsyBannerHidden(false);
+  }, [history.length]);
+
   const splittingHint = useMemo(() => {
     if (mergePickIds.length === 0) return null;
     if (mergePickIds.length === 1) {
@@ -312,9 +398,10 @@ export default function V2App() {
     <div className="flex flex-col h-screen bg-slate-50 overflow-hidden font-sans selection:bg-indigo-100">
       {showCreateModal && (
         <V2CreateModal
-          onCreate={(w, h) => {
+          onCreate={(w, h, shape) => {
             setWidth(w);
             setHeight(h);
+            setInitialShape(shape);
             setShowCreateModal(false);
           }}
         />
@@ -328,6 +415,25 @@ export default function V2App() {
       />
 
       <V2Navigation activeTab={activeTab} setActiveTab={setActiveTab} />
+
+      {activeTab === 'TOPOLOGY' && whimsyWarnings.length > 0 && !whimsyBannerHidden && (
+        <div className="shrink-0 px-4 py-2 bg-amber-50 border-b border-amber-100 flex items-start gap-3">
+          <span className="text-amber-800 text-xs font-semibold leading-snug flex-1">
+            {whimsyWarnings.map((w, i) => (
+              <span key={i} className="block">
+                {w}
+              </span>
+            ))}
+          </span>
+          <button
+            type="button"
+            onClick={() => setWhimsyBannerHidden(true)}
+            className="text-amber-700 hover:bg-amber-100 rounded px-2 py-0.5 text-xs font-bold"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       <V2ActionBar
         activeTab={activeTab}
@@ -359,6 +465,17 @@ export default function V2App() {
           setSelectedType('NONE');
           setMergePickIds([]);
         }}
+        onExportSvg={exportCutSvg}
+        geometryEngine={geometryEngine}
+        whimsyTemplate={whimsyTemplate}
+        setWhimsyTemplate={setWhimsyTemplate}
+        whimsyScale={whimsyScale}
+        setWhimsyScale={setWhimsyScale}
+        whimsyRotationDeg={whimsyRotationDeg}
+        setWhimsyRotationDeg={setWhimsyRotationDeg}
+        whimsyPlacementActive={whimsyPlacementActive}
+        startWhimsyPlacement={() => setWhimsyPlacementActive(true)}
+        cancelWhimsyPlacement={() => setWhimsyPlacementActive(false)}
       />
 
       <main className="flex-1 relative overflow-hidden flex flex-col" ref={containerRef}>
@@ -368,7 +485,8 @@ export default function V2App() {
           fitScale={scale}
           isMobile={isMobile}
           activeTab={activeTab}
-          displayPieces={finalPieces}
+          displayPieces={canvasPieces}
+          connectorOverlays={canvasConnectorOverlays}
           selectedId={selectedId}
           mergePickIds={mergePickIds}
           sharedEdges={sharedEdges}
@@ -381,6 +499,10 @@ export default function V2App() {
           setSelectedId={setSelectedId}
           setSelectedType={setSelectedType}
           longPressProps={longPressProps}
+          whimsyPlacementActive={whimsyPlacementActive && activeTab === 'TOPOLOGY'}
+          whimsyPreviewPathData={whimsyPlacementActive && activeTab === 'TOPOLOGY' ? whimsyPreviewPathData : null}
+          onWhimsyBoardPointerMove={setWhimsyPreviewCenter}
+          onWhimsyCommit={commitWhimsyAt}
           onBackgroundClick={() => {
             if (activeTab === 'TOPOLOGY') {
               setMergePickIds([]);

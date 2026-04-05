@@ -1,41 +1,124 @@
 import React, { useState } from 'react';
-import { Layers } from 'lucide-react';
+import { Circle, Layers, Shapes, VectorSquare } from 'lucide-react';
+import { CreateRootShape } from '../types';
 
-interface Preset { label: string; w: number; h: number }
+interface Preset {
+  label: string;
+  w: number;
+  h: number;
+}
 
 const PRESETS: Preset[] = [
-  { label: 'Square',  w: 600,  h: 600  },
-  { label: 'A4 land', w: 842,  h: 595  },
-  { label: 'A4 port', w: 595,  h: 842  },
-  { label: '4:3',     w: 800,  h: 600  },
-  { label: '16:9',    w: 960,  h: 540  },
+  { label: 'Square', w: 600, h: 600 },
+  { label: 'A4 land', w: 842, h: 595 },
+  { label: 'A4 port', w: 595, h: 842 },
+  { label: '4:3', w: 800, h: 600 },
+  { label: '16:9', w: 960, h: 540 },
+];
+
+type ShapeOption = {
+  id: CreateRootShape['variant'];
+  label: string;
+  description: string;
+  shape: CreateRootShape;
+  icon: React.ReactNode;
+  disabled?: boolean;
+  disabledHint?: string;
+};
+
+const SHAPE_OPTIONS: ShapeOption[] = [
+  {
+    id: 'rect',
+    label: 'Rectangle',
+    description: 'Full canvas',
+    shape: { variant: 'rect' },
+    icon: <VectorSquare className="w-4 h-4" />,
+  },
+  {
+    id: 'circle',
+    label: 'Circle',
+    description: 'Inscribed in canvas',
+    shape: { variant: 'circle' },
+    icon: <Circle className="w-4 h-4" />,
+  },
+  {
+    id: 'svgContour',
+    label: 'SVG contour',
+    description: 'Import a path',
+    shape: { variant: 'svgContour' },
+    icon: <Shapes className="w-4 h-4" />,
+    disabled: true,
+    disabledHint: 'Not implemented yet',
+  },
+  {
+    id: 'multiCircle',
+    label: 'Two circles',
+    description: 'Two separate regions',
+    shape: { variant: 'multiCircle', count: 2 },
+    icon: (
+      <span className="flex gap-0.5">
+        <Circle className="w-3.5 h-3.5" />
+        <Circle className="w-3.5 h-3.5" />
+      </span>
+    ),
+  },
 ];
 
 interface V2CreateModalProps {
-  onCreate: (w: number, h: number) => void;
+  onCreate: (w: number, h: number, shape: CreateRootShape) => void;
 }
 
 export const V2CreateModal: React.FC<V2CreateModalProps> = ({ onCreate }) => {
   const [w, setW] = useState(800);
   const [h, setH] = useState(600);
+  const [shape, setShape] = useState<CreateRootShape>({ variant: 'rect' });
 
-  const apply = (preset: Preset) => { setW(preset.w); setH(preset.h); };
+  const apply = (preset: Preset) => {
+    setW(preset.w);
+    setH(preset.h);
+  };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-sm space-y-6">
-        {/* Header */}
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
+      <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md space-y-6 max-h-[min(90vh,720px)] overflow-y-auto">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-indigo-600 rounded-xl text-white shadow-lg shadow-indigo-200">
             <Layers className="w-5 h-5" />
           </div>
           <div>
             <h2 className="text-lg font-bold text-slate-900">New Puzzle</h2>
-            <p className="text-xs text-slate-400">Set the canvas size to get started</p>
+            <p className="text-xs text-slate-400">Canvas size and initial region shape</p>
           </div>
         </div>
 
-        {/* Presets */}
+        <div>
+          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Initial region</span>
+          <div className="grid grid-cols-2 gap-2 mt-2">
+            {SHAPE_OPTIONS.map(opt => (
+              <button
+                key={opt.id}
+                type="button"
+                disabled={opt.disabled}
+                title={opt.disabled ? opt.disabledHint : undefined}
+                onClick={() => !opt.disabled && setShape(opt.shape)}
+                className={`flex flex-col items-start gap-1 px-3 py-2.5 rounded-xl border text-left transition-all ${
+                  opt.disabled
+                    ? 'opacity-40 cursor-not-allowed border-slate-100 bg-slate-50'
+                    : shape.variant === opt.id
+                      ? 'bg-indigo-50 border-indigo-300 text-indigo-900'
+                      : 'bg-slate-50 border-slate-200 text-slate-700 hover:border-indigo-200'
+                }`}
+              >
+                <span className="flex items-center gap-2 text-[11px] font-bold">
+                  <span className="text-indigo-600">{opt.icon}</span>
+                  {opt.label}
+                </span>
+                <span className="text-[10px] text-slate-500 font-medium leading-tight">{opt.description}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div>
           <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Presets</span>
           <div className="flex flex-wrap gap-2 mt-2">
@@ -55,7 +138,6 @@ export const V2CreateModal: React.FC<V2CreateModalProps> = ({ onCreate }) => {
           </div>
         </div>
 
-        {/* Custom size */}
         <div>
           <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Custom size (px)</span>
           <div className="flex items-center gap-3 mt-2">
@@ -85,9 +167,9 @@ export const V2CreateModal: React.FC<V2CreateModalProps> = ({ onCreate }) => {
           </div>
         </div>
 
-        {/* Create button */}
         <button
-          onClick={() => onCreate(w, h)}
+          type="button"
+          onClick={() => onCreate(w, h, shape)}
           className="w-full py-2.5 bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200"
         >
           Create Puzzle

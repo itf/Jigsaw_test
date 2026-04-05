@@ -13,7 +13,7 @@ A deterministic, action-based web application for designing custom jigsaw puzzle
 The system is built around three core principles:
 
 1. **History as source of truth.** Every user action is an immutable record. The scene is always a pure function of the history array. This enables perfect undo, reproducibility, and serialisation.
-2. **Topology over booleans.** The geometry engine maintains a face-edge-vertex graph rather than repeatedly unioning/subtracting paths. This eliminates floating-point drift and avoids double-cut artifacts.
+2. **Two geometry backends.** The app ships **topological** (face–edge graph, spliced boundaries) and **boolean** (Paper.js union/subtract on SVG paths). The user toggles between them in the header. Topological mode is tuned for graph-consistent previews; boolean mode matches a typical **laser / path-CSG** workflow (whimsies and arbitrary outlines align with booleans long-term — see product discussions).
 3. **Tab-gated pipeline.** The six-tab layout gates later operations behind earlier ones, guiding the designer through a deterministic production workflow.
 
 ---
@@ -40,8 +40,9 @@ The system is built around three core principles:
 
 A Connector is a first-class entity defined by the relationship between two specific Areas.
 
-- **Shared Perimeter Coordinate (`u`)**: the total shared boundary interface is normalised to `[0, 1]`. The anchor sits at position `u` along that interface. `u=0 → p1`, `u=0.5 → geometric midpoint`, `u=1 → p2` (guaranteed by the vertex-matching implementation of `getSharedPerimeter`).
-- **Multi-area boolean logic**: the connector shape is _added_ (union) to its owner piece and _subtracted_ (difference) from every other Area it overlaps.
+- **Shared Perimeter Coordinate (`u`)**: the shared interface chord from `getSharedPerimeter` is parameterised by arc length. **In the implementation, `u` is clamped to `[0.001, 0.999]`** everywhere (geometry + UI) to avoid degenerate sampling at exact endpoints.
+- **Clip overlapping pieces (`clipOverlap`)**: **Boolean engine** — when off, the stamp is intersected with `(owner ∪ neighbor)` before booleans so the cut does not spill into unrelated cells; when on, the full stamp is used on owner/neighbor and subtracted from overlapping third pieces. **Topological engine** — this flag is **always treated as on** (only one mode is supported); the UI shows the checkbox checked and disabled.
+- **Multi-area boolean logic** (boolean engine): union onto owner, subtract from neighbor; optional third-piece subtract when `clipOverlap` is on.
 - **Dormancy**: if two areas are merged the connector's shared perimeter vanishes. It remains in the history log as dormant and is excluded from SVG output. It reappears if the merge is undone.
 - **Flip**: `isFlipped = true` means the tab protrudes into `areaA` instead of `areaB`.
 
@@ -59,7 +60,7 @@ A Connector is a first-class entity defined by the relationship between two spec
 
 The renderer tracks a global network of unique vertices and edges. A shared edge between two adjacent pieces is stored exactly once. This prevents double-cut paths in laser output and eliminates Z-fighting artifacts in the SVG preview.
 
-The topological engine is the **canonical and preferred backend**. The boolean engine is retained for debugging comparison only.
+Both engines are **first-class**: topological for edge-graph fidelity and connector splicing; boolean for path-level cut geometry and export. The user chooses via the header toggle.
 
 ---
 
@@ -67,12 +68,12 @@ The topological engine is the **canonical and preferred backend**. The boolean e
 
 | Tab | Operations processed | Visualisation |
 |---|---|---|
-| **1 · Topology** | CREATE_ROOT → SUBDIVIDE | Raw Voronoi fills, seed points |
-| **2 · Modification** | SUBDIVIDE → MERGE | Boundary paths (no connectors); merged edges dimmed |
+| **1 · Topology** | CREATE_ROOT, SUBDIVIDE, MERGE | Split / merge / delete-piece; raw fills; shared edges (no connectors) |
+| **2 · Modification** | (reserved) | Placeholder — merge tooling lives on Topology for now |
 | **3 · Connection** | MERGE → ADD_CONNECTOR | Connector anchors, type/size editor |
 | **4 · Resolution** | ADD_CONNECTOR → RESOLVE_CONSTRAINTS | Connector shapes after elastic solver; deleted connectors shown in red |
 | **5 · Transformation** | RESOLVE → TRANSFORM_GEOMETRY | Warped final SVG (conformal, polar, etc.) |
-| **6 · Production** | TRANSFORM → Export | Kerf-offset paths; single-path extraction; export controls |
+| **6 · Production** | TRANSFORM → Export | **Implemented:** download SVG of stroke-only piece contours from current engine output. **Future:** kerf offset, single-edge walk, layers (`03_next_steps.md` Phase 6). |
 
 Each tab re-executes the history up to its own stage. Earlier operations are locked (read-only) in later tabs.
 
@@ -87,7 +88,8 @@ Stage 5 (`connectors`) early-returns an empty list on TOPOLOGY and MODIFICATION 
 | Pattern | Algorithm | Parameters | Status |
 |---|---|---|---|
 | Grid | Regular cell-centred grid with optional jitter | rows, cols, jitter | Implemented |
-| Hex | Offset-column hexagonal packing with optional jitter | size, jitter | Implemented |
+| Hex lattice | Staggered rows×cols of seed points inside bounds | rows, cols | Implemented (UI) |
+| Hex (density) | Offset-column hex packing by cell size | size, jitter | Implemented in code; UI uses hex lattice |
 | Random | Uniform random within bounds | count | Implemented (unseeded) |
 | Poisson-disc | Bridson's algorithm | min-distance, seed | Planned |
 | Spiral | Fermat / sunflower spiral | count, scale | Planned |
@@ -103,16 +105,17 @@ See `01_current_state.md §Topological engine` for the current implementation de
 - **Spatial indexing**: an R-tree (or QuadTree) over edge AABBs for O(log n) adjacency queries replacing the current O(n²) scan.
 - **Compound paths**: faces can have holes (whimsy inner boundaries); the graph handles multiple loops per face.
 
-### 4.3 `getSharedPerimeter` — Vertex Matching
+### 4.3 `getSharedPerimeter` — chord along the interface
 
-The canonical approach for finding the shared boundary between two adjacent areas (implemented in `geometry.ts`):
+Implemented in `geometry.ts`. Does **not** use `path.intersect` for the primary chord (avoids the “double-edge sliver” closed path and arbitrary start vertices that broke `u`).
 
-1. Iterate all segments of both boundary paths.
-2. Collect vertices from A within 1.5 px of any vertex in B (these are the shared corner points).
-3. Take the pair with the greatest distance — that is the actual shared edge span.
-4. Return a clean open path `M p1 L p2`.
+Candidate points on the shared interface include:
 
-This sidesteps the Paper.js intersection approach, which produced an ambiguously-oriented "double-edge sliver" closed path — a closed path traversing the same edge twice in both directions, with an arbitrary start vertex. That approach made `u=0.5` land at a corner rather than the geometric midpoint.
+1. **Vertex–vertex** matches (within ~1.5 px).
+2. **Vertex on segment** (T-junctions): a vertex of one polygon lies on an edge of the other without a matching vertex — e.g. a subpiece corner on the interior of a neighbor’s long edge.
+3. **Collinear segment overlap** endpoints and **proper segment–segment** intersections.
+
+After deduplication, the **farthest pair** defines the open path `M p1 L p2` used for `getPointAtU` and merge adjacency.
 
 ### 4.4 Warp Engine
 
@@ -178,12 +181,14 @@ Not yet implemented.
 
 ### 4.7 Production — Kerf & Export
 
+**Current (v2):** Production tab triggers download of **`puzzle-cut.svg`**: one `<path>` per merged piece, **`fill="none"`** and **stroke** per piece colour (laser-oriented contours). Source: `finalPieces` from `usePuzzleEngine` (boolean cut paths or topological merged boundaries).
+
+**Planned:**
+
 - **Single-path extraction**: walk the global edge graph and emit each edge exactly once, regardless of how many faces share it.
 - **Kerf compensation**: offset each boundary path outward or inward by half the laser beam width using Paper.js `path.offset()` (or equivalent).
 - **Layer separation**: outer boundary, internal cuts, whimsy outlines on separate SVG layers.
-- **Export formats**: SVG (primary), PDF, DXF (future).
-
-Not yet implemented (button exists in UI, no logic).
+- **Export formats**: PDF, DXF (future).
 
 ---
 
@@ -206,7 +211,7 @@ The history array is the canonical save format. Any session can be resumed by lo
 
 ### 5.2 Derived State
 
-All computed state is derived from `(history, width, height)`. Nothing persistent is stored outside the history. The 8-stage `usePuzzleEngine` hook implements this as a chain of `useMemo` calls — see `01_current_state.md §The 8-stage pipeline`.
+All computed state is derived from `(history, width, height)`. Nothing persistent is stored outside the history. The `usePuzzleEngine` hook implements this as a chain of `useMemo` stages — see `01_current_state.md §The pipeline`.
 
 ### 5.3 Known Non-Determinism
 
@@ -224,8 +229,8 @@ On first load, a modal prompts the user to set puzzle dimensions. Presets: Squar
 
 | Tab | Primary interaction |
 |---|---|
-| Topology | Select an area → click Split button in action bar to subdivide it |
-| Modification | Click area A → click area B → merge |
+| Topology | Tap pieces to toggle selection → **Split** (one subdivide per selected leaf), **Merge** (≥2 picked), **Delete piece** (merge with all neighbors). After an operation, selection clears. |
+| Modification | Placeholder |
 | Connection | Click a shared edge at the desired position → connector is placed at `u` |
 | Resolution | Read-only preview of solver output |
 | Transformation | (future) drag control points |
@@ -233,8 +238,9 @@ On first load, a modal prompts the user to set puzzle dimensions. Presets: Squar
 
 ### 6.3 Selection & Editing
 
-- **Area selection**: click fills the action bar with area info and subdivision options.
-- **Split buttons disabled** when nothing is selected or the area already has children (`isPiece === false`).
+- **Topology — area selection**: tap display pieces to toggle membership in the selection set; selected pieces show a strong overlay + stroke on canvas.
+- **Split**: requires at least one selected **leaf**; applies the current pattern (grid, hex lattice, or random) to **each** selected leaf in one batch. Merged groups use a union clip and correct seed bounds.
+- **Merge / delete**: merge is disabled until ≥2 pieces are selected; delete piece merges the target with neighbors along the boundary graph.
 - **Connector selection**: click a connector anchor to open the connector editor (type, size, flip, delete).
 - **Undo**: pops the last operation from history; works across all tabs.
 - **Delete operation**: any operation can be individually removed from history (re-replay handles cascading effects).
@@ -243,7 +249,7 @@ On first load, a modal prompts the user to set puzzle dimensions. Presets: Squar
 
 Two permanent rows — the selection row never replaces the tab-controls row:
 
-- **Row 1 (always visible)**: tab-level controls — split pattern inputs and buttons.
+- **Row 1 (always visible)**: tab-level controls — e.g. Topology: split pattern dropdown, size inputs, Split / Merge / Delete piece.
 - **Row 2 (conditional)**: selection panel showing info about the currently selected area or connector.
 
 This prevents the selection row from covering the split buttons.

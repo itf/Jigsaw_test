@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import paper from 'paper';
-import { getSharedPerimeter } from './geometry';
+import { getSharedPerimeter, connectorOwnerNeighborLeafIds } from './geometry';
 import { Area, AreaType } from './types';
 
 describe('getSharedPerimeter', () => {
@@ -33,5 +33,25 @@ describe('getSharedPerimeter', () => {
     expect(shared).not.toBeNull();
     expect((shared as paper.Path).length).toBeGreaterThan(1);
     shared!.remove();
+  });
+});
+
+describe('connectorOwnerNeighborLeafIds', () => {
+  it('maps isFlipped to owner/neighbor without geometry', () => {
+    expect(
+      connectorOwnerNeighborLeafIds({
+        isFlipped: false,
+        areaAId: 'A',
+        areaBId: 'B',
+      })
+    ).toEqual({ ownerLeafId: 'A', neighborLeafId: 'B' });
+
+    expect(
+      connectorOwnerNeighborLeafIds({
+        isFlipped: true,
+        areaAId: 'A',
+        areaBId: 'B',
+      })
+    ).toEqual({ ownerLeafId: 'B', neighborLeafId: 'A' });
   });
 });
