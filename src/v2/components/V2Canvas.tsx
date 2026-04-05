@@ -3,8 +3,8 @@ import paper from 'paper';
 import { Maximize2, Minus, Plus } from 'lucide-react';
 import { Tab } from '../constants';
 import { Area, Connector, Point } from '../types';
-import { getSharedPerimeter, getPointAtU } from '../geometry';
-import { resetPaperProject } from '../paperProject';
+import { getSharedPerimeter, getPointAtU, getTotalOffset } from '../geometry';
+import { resetPaperProject, pathItemFromBoundaryData } from '../paperProject';
 import type { ConnectorOverlay } from '../boolean_connector_geometry';
 
 function sanitizeSvgId(id: string) {
@@ -233,12 +233,13 @@ export const V2Canvas: React.FC<V2CanvasProps> = ({
     const out: { id: string; x: number; y: number; isDeleted: boolean }[] = [];
     for (const c of resolvedConnectors) {
       const areaA = topology[c.areaAId];
-      const areaB = topology[c.areaBId];
-      if (!areaA || !areaB) continue;
-      const shared = getSharedPerimeter(areaA, areaB);
-      if (!shared) continue;
-      const pos = getPointAtU(shared, c.u);
-      shared.remove();
+      if (!areaA) continue;
+      
+      // Use the piece's total boundary for u parameterization
+      const pathA = pathItemFromBoundaryData(areaA.boundary);
+      const pos = getPointAtU(pathA, c.u);
+      pathA.remove();
+      
       if (!pos) continue;
       out.push({ id: c.id, x: pos.point.x, y: pos.point.y, isDeleted: !!c.isDeleted });
     }
@@ -427,10 +428,18 @@ export const V2Canvas: React.FC<V2CanvasProps> = ({
                     pt.y = e.clientY;
                     const localPt = pt.matrixTransform(svg.getScreenCTM()?.inverse());
                     resetPaperProject(width, height);
-                    const path = new paper.Path(edge.pathData);
-                    const nearest = path.getNearestLocation(new paper.Point(localPt.x, localPt.y));
-                    const u = nearest.offset / path.length;
-                    path.remove();
+                    const areaA = topology[edge.areaAId];
+                    if (!areaA) return;
+                    
+                    const pathA = pathItemFromBoundaryData(areaA.boundary);
+                    const nearest = pathA.getNearestLocation(new paper.Point(localPt.x, localPt.y));
+                    const totalOffset = getTotalOffset(pathA, nearest);
+                    const totalLen = pathA instanceof paper.CompoundPath 
+                      ? (pathA.children.filter(c => c instanceof paper.Path) as paper.Path[]).reduce((acc, ch) => acc + ch.length, 0)
+                      : (pathA as paper.Path).length;
+                    
+                    const u = totalOffset / (totalLen || 1);
+                    pathA.remove();
                     addConnector(edge.areaAId, edge.areaBId, u);
                   }}
                 />

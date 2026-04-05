@@ -12,6 +12,9 @@ import {
   connectorOwnerNeighborLeafIds,
   orientConnectorNormalTowardNeighbor,
   clampConnectorU,
+  findNeighborAt,
+  pathsTouch,
+  sortCompoundPathChildren,
 } from '../geometry';
 import {
   computeBooleanGeometry,
@@ -158,10 +161,15 @@ export function usePuzzleEngine({
           const a = areas[la];
           const b = areas[lb];
           if (!a || !b) return;
-          const shared = getSharedPerimeter(a, b);
-          if (shared) {
+          
+          const pathA = pathItemFromBoundaryData(a.boundary);
+          const pathB = pathItemFromBoundaryData(b.boundary);
+          const touching = pathsTouch(pathA, pathB, 1.0);
+          pathA.remove();
+          pathB.remove();
+          
+          if (touching) {
             union(la, lb);
-            shared.remove();
           }
         });
       });
@@ -249,68 +257,96 @@ export function usePuzzleEngine({
     return { topology: areas, mergedGroups: groups, whimsyWarnings };
   }, [baseAreas, history, width, height]);
 
-  // 4. Shared Edges: For visualization and connector placement
-  const sharedEdges = useMemo(() => {
-    const leafAreas = (Object.values(topology) as Area[]).filter(a => a.isPiece);
-    const edges: { id: string; areaAId: string; areaBId: string; pathData: string; isMerged: boolean }[] = [];
+    // 4. Shared Edges: For visualization and connector placement
+    const sharedEdges = useMemo(() => {
+      const leafAreas = (Object.values(topology) as Area[]).filter(a => a.isPiece);
+      const edges: { id: string; areaAId: string; areaBId: string; pathData: string; isMerged: boolean }[] = [];
 
-    if (leafAreas.length > 200) return [];
+      if (leafAreas.length > 200) return [];
 
-    resetPaperProject(width, height);
+      resetPaperProject(width, height);
 
-    const whimsyAreas = leafAreas.filter(a => a.type === AreaType.WHIMSY);
+      const whimsyAreas = leafAreas.filter(a => a.type === AreaType.WHIMSY);
 
-    const getGroupId = (areaId: string) => {
-      for (const [groupId, ids] of Object.entries(mergedGroups as Record<string, string[]>)) {
-        if (ids.includes(areaId)) return groupId;
+      const getGroupId = (areaId: string) => {
+        for (const [groupId, ids] of Object.entries(mergedGroups as Record<string, string[]>)) {
+          if (ids.includes(areaId)) return groupId;
+        }
+        return areaId;
+      };
+
+      // Group shared perimeters by (groupA, groupB)
+      const groupSharedMap = new Map<string, { areaAId: string; areaBId: string; paths: paper.PathItem[]; isMerged: boolean }>();
+
+      for (let i = 0; i < leafAreas.length; i++) {
+        for (let j = i + 1; j < leafAreas.length; j++) {
+          const areaA = leafAreas[i];
+          const areaB = leafAreas[j];
+
+          const shared = getSharedPerimeter(areaA, areaB);
+          if (!shared) continue;
+
+          const groupA = getGroupId(areaA.id);
+          const groupB = getGroupId(areaB.id);
+          const isMerged = groupA === groupB;
+
+          const key = [groupA, groupB].sort().join('::');
+          if (!groupSharedMap.has(key)) {
+            groupSharedMap.set(key, { areaAId: areaA.id, areaBId: areaB.id, paths: [], isMerged });
+          }
+          groupSharedMap.get(key)!.paths.push(shared);
+        }
       }
-      return areaId;
-    };
 
-    for (let i = 0; i < leafAreas.length; i++) {
-      for (let j = i + 1; j < leafAreas.length; j++) {
-        const areaA = leafAreas[i];
-        const areaB = leafAreas[j];
-
-        // Skip edges involving a whimsy piece itself — whimsy boundaries are curved arcs
-        // and getSharedPerimeter returns a degenerate chord for them.
-        if (areaA.type === AreaType.WHIMSY || areaB.type === AreaType.WHIMSY) continue;
-
-        const groupA = getGroupId(areaA.id);
-        const groupB = getGroupId(areaB.id);
-        const isMerged = groupA === groupB;
-
-        const shared = getSharedPerimeter(areaA, areaB);
-        if (!shared) continue;
-
-        // When a whimsy has been cut from the material, two remainder pieces may still share
-        // candidate boundary points on both sides of the whimsy. getSharedPerimeter picks the
-        // farthest pair, producing a chord that crosses through the whimsy. Clip the chord
-        // against all whimsy piece paths and discard it if nothing survives outside them.
-        let edgePath: paper.PathItem = shared;
-        for (const w of whimsyAreas) {
-          if (!edgePath) break;
-          const wPath = pathItemFromBoundaryData(w.boundary);
-          const clipped = edgePath.subtract(wPath);
-          wPath.remove();
-          edgePath.remove();
-          edgePath = clipped;
+      for (const [key, data] of groupSharedMap.entries()) {
+        const { areaAId, areaBId, paths, isMerged } = data;
+        
+        // Combine all paths for this group pair
+        let combined: paper.PathItem | null = null;
+        for (const p of paths) {
+          if (!combined) {
+            combined = p;
+          } else {
+            const next = combined.unite(p);
+            combined.remove();
+            p.remove();
+            combined = next;
+          }
         }
 
-        if (edgePath && (edgePath as paper.Path).length > 0.05) {
+        if (!combined || (combined as any).length < 0.05) {
+          combined?.remove();
+          continue;
+        }
+
+        // Clip against whimsies if not a whimsy itself
+        const areaA = topology[areaAId];
+        const areaB = topology[areaBId];
+        if (areaA.type !== AreaType.WHIMSY && areaB.type !== AreaType.WHIMSY) {
+          for (const w of whimsyAreas) {
+            const wPath = pathItemFromBoundaryData(w.boundary);
+            const clipped = combined.subtract(wPath);
+            wPath.remove();
+            combined.remove();
+            combined = clipped;
+            if (!combined || (combined as any).length < 0.05) break;
+          }
+        }
+
+        if (combined && (combined as any).length > 0.05) {
           edges.push({
-            id: `${areaA.id}-${areaB.id}`,
-            areaAId: areaA.id,
-            areaBId: areaB.id,
-            pathData: edgePath.pathData,
+            id: key,
+            areaAId,
+            areaBId,
+            pathData: (combined as any).pathData,
             isMerged
           });
         }
-        edgePath?.remove();
+        combined?.remove();
       }
-    }
-    return edges;
-  }, [topology, mergedGroups, width, height]);
+
+      return edges;
+    }, [topology, mergedGroups, width, height]);
 
   // 5. Connectors: The list of tabs to be applied
   const connectors = useMemo<Connector[]>(() => {
@@ -339,6 +375,21 @@ export function usePuzzleEngine({
     return connList;
   }, [history, activeTab, geometryEngine, topology]);
 
+  // Re-anchor connectors to their actual neighbor at position 'u'
+  const reanchoredConnectors = useMemo(() => {
+    if (Object.keys(topology).length === 0) return connectors;
+    resetPaperProject(width, height);
+    return connectors.map(c => {
+      const areaA = topology[c.areaAId];
+      if (!areaA) return c;
+      const actualNeighborId = findNeighborAt(areaA, c.u, topology, width, height);
+      if (actualNeighborId && actualNeighborId !== c.areaBId) {
+        return { ...c, areaBId: actualNeighborId };
+      }
+      return c;
+    });
+  }, [connectors, topology, width, height]);
+
   const mergeHistorySig = useMemo(
     () =>
       history
@@ -361,19 +412,22 @@ export function usePuzzleEngine({
       height,
       topology,
       mergedGroups as Record<string, string[]>,
-      connectors
+      reanchoredConnectors
     );
-  }, [topology, mergedGroups, connectors, width, height, geometryEngine]);
+  }, [topology, mergedGroups, reanchoredConnectors, width, height, geometryEngine]);
 
-  // Resolved connectors: BOOLEAN reuses collision result from `computeBooleanGeometry`; TOPO uses resolve only.
+  // Resolved connectors: re-anchor to current neighbor at position 'u' before resolving collisions.
   const resolvedConnectors = useMemo(() => {
     if (activeTab === 'TOPOLOGY' || activeTab === 'MODIFICATION') return [];
+    
     if (geometryEngine === 'BOOLEAN') {
+      // BOOLEAN reuses collision result from computeBooleanGeometry
       return booleanGeometry?.resolvedConnectors ?? [];
     }
+    
     resetPaperProject(width, height);
-    return resolveCollisions(connectors, topology);
-  }, [connectors, topology, activeTab, width, height, geometryEngine, booleanGeometry]);
+    return resolveCollisions(reanchoredConnectors, topology);
+  }, [reanchoredConnectors, topology, activeTab, width, height, geometryEngine, booleanGeometry]);
 
   // 7. Final Pieces: The base geometry of each piece (merged or single)
   const finalPieces = useMemo(() => {
@@ -468,14 +522,25 @@ export function usePuzzleEngine({
         const stampPathData = rawStamp.pathData;
         rawStamp.remove();
 
-        const shared = getSharedPerimeter(areaA, areaB);
-        if (!shared) return;
-        const chordPath = shared as paper.Path;
-        const chordEnd0 = chordPath.firstSegment.point.clone();
-        const chordEnd1 = chordPath.lastSegment.point.clone();
-        const pos = getPointAtU(shared, c.u);
-        shared.remove();
+        const pathA = pathItemFromBoundaryData(areaA.boundary);
+        const pos = getPointAtU(pathA, c.u);
+        pathA.remove();
         if (!pos) return;
+
+        const shared = getSharedPerimeter(areaA, areaB);
+        let chordEnd0: paper.Point | undefined;
+        let chordEnd1: paper.Point | undefined;
+        let sharedU = 0.5;
+
+        if (shared) {
+          const chordPath = shared as paper.Path;
+          chordEnd0 = chordPath.firstSegment.point.clone();
+          chordEnd1 = chordPath.lastSegment.point.clone();
+          
+          const nearestOnShared = shared.getNearestPoint(pos.point);
+          sharedU = shared.getOffsetOf(nearestOnShared) / shared.length;
+          shared.remove();
+        }
 
         const ownerFaceId = c.isFlipped ? c.areaBId : c.areaAId;
         engine.addConnectorAtAnchor(
@@ -485,7 +550,7 @@ export function usePuzzleEngine({
           stampPathData,
           c.isFlipped,
           ownerFaceId,
-          c.u,
+          sharedU, // Use shared-edge-relative u for tie-breaking
           chordEnd0,
           chordEnd1
         );
@@ -571,10 +636,9 @@ export function usePuzzleEngine({
             const areaB = topology[c.areaBId];
             if (!areaA || !areaB) return;
 
-            const shared = getSharedPerimeter(areaA, areaB);
-            if (!shared) return;
-            const pos = getPointAtU(shared, c.u);
-            shared.remove();
+            const pathA = pathItemFromBoundaryData(areaA.boundary);
+            const pos = getPointAtU(pathA, c.u);
+            pathA.remove();
             if (!pos) return;
 
             const { ownerLeafId, neighborLeafId } = connectorOwnerNeighborLeafIds(c);

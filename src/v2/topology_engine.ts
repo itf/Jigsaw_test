@@ -54,7 +54,7 @@ export class TopologicalEngine {
     resetPaperProject(width, height);
 
     // 1. Extract all segments from all paths
-    const rawSegments: { p1: paper.Point; p2: paper.Point; faceId: string }[] = [];
+    const rawSegments: { p1: paper.Point; p2: paper.Point; faceId: string; pathData: string; curve: paper.Curve }[] = [];
     const allPoints: paper.Point[] = [];
 
     leafAreas.forEach(area => {
@@ -65,20 +65,26 @@ export class TopologicalEngine {
         if (child instanceof paper.Path) {
           if (child.clockwise) child.reverse();
 
-          child.segments.forEach((seg, i) => {
-            const nextSeg = child.segments[(i + 1) % child.segments.length];
+          child.curves.forEach((curve) => {
             const p1 = new paper.Point(
-              Math.round(seg.point.x * 1000) / 1000,
-              Math.round(seg.point.y * 1000) / 1000
+              Math.round(curve.point1.x * 1000) / 1000,
+              Math.round(curve.point1.y * 1000) / 1000
             );
             const p2 = new paper.Point(
-              Math.round(nextSeg.point.x * 1000) / 1000,
-              Math.round(nextSeg.point.y * 1000) / 1000
+              Math.round(curve.point2.x * 1000) / 1000,
+              Math.round(curve.point2.y * 1000) / 1000
             );
 
             if (p1.equals(p2)) return;
 
-            rawSegments.push({ p1, p2, faceId: area.id });
+            // Store the actual curve geometry
+            const curvePath = new paper.Path();
+            curvePath.add(curve.segment1.clone());
+            curvePath.add(curve.segment2.clone());
+            const pathData = curvePath.pathData;
+            curvePath.remove();
+
+            rawSegments.push({ p1, p2, faceId: area.id, pathData, curve: curve.clone() });
             allPoints.push(p1);
           });
         }
@@ -106,8 +112,8 @@ export class TopologicalEngine {
     const uniquePoints = Array.from(uniquePointsMap.values());
 
     // 3. Split segments at T-junctions
-    const finalEdges: { v1Id: string; v2Id: string; faceId: string }[] = [];
-    const TOLERANCE = 0.01;
+    const finalEdges: { v1Id: string; v2Id: string; faceId: string; pathData: string }[] = [];
+    const TOLERANCE = 0.05;
 
     rawSegments.forEach(seg => {
       const ptsOnSeg: { p: paper.Point; t: number }[] = [
@@ -115,18 +121,14 @@ export class TopologicalEngine {
         { p: seg.p2, t: 1 }
       ];
 
-      const vec = seg.p2.subtract(seg.p1);
-      const lenSq = vec.x * vec.x + vec.y * vec.y;
-
       uniquePoints.forEach(v => {
         if (v.equals(seg.p1) || v.equals(seg.p2)) return;
 
-        // Check if v lies on segment p1p2
-        // Projection t = (v - p1) . (p2 - p1) / |p2 - p1|^2
-        const t = v.subtract(seg.p1).dot(vec) / lenSq;
-        if (t > 0.0001 && t < 0.9999) {
-          const projection = seg.p1.add(vec.multiply(t));
-          if (projection.getDistance(v) < TOLERANCE) {
+        // Use Paper.js to find the closest point on the curve
+        const nearest = seg.curve.getNearestPoint(v);
+        if (nearest.getDistance(v) < TOLERANCE) {
+          const t = seg.curve.getOffsetOf(nearest) / seg.curve.length;
+          if (t > 0.001 && t < 0.999) {
             ptsOnSeg.push({ p: v, t });
           }
         }
@@ -135,12 +137,40 @@ export class TopologicalEngine {
       // Sort points along the segment
       ptsOnSeg.sort((a, b) => a.t - b.t);
 
-      // Create edges from consecutive points
+      // Create edges from consecutive points by dividing the curve
       for (let i = 0; i < ptsOnSeg.length - 1; i++) {
+        const tStart = ptsOnSeg[i].t;
+        const tEnd = ptsOnSeg[i+1].t;
+        
+        // Extract the sub-curve
+        const subPath = new paper.Path();
+        subPath.add(seg.curve.segment1.clone());
+        subPath.add(seg.curve.segment2.clone());
+        
+        let targetCurve = subPath.curves[0];
+        if (tEnd < 0.999) {
+          targetCurve.divideAtTime(tEnd);
+          targetCurve = subPath.curves[0];
+        }
+        if (tStart > 0.001) {
+          const secondPart = targetCurve.divideAtTime(tStart / (tEnd || 1));
+          if (secondPart) {
+            targetCurve = secondPart;
+          }
+        }
+        
+        const finalSubPath = new paper.Path();
+        finalSubPath.add(targetCurve.segment1.clone());
+        finalSubPath.add(targetCurve.segment2.clone());
+        const subPathData = finalSubPath.pathData;
+        finalSubPath.remove();
+        subPath.remove();
+
         finalEdges.push({
           v1Id: getVertexId(ptsOnSeg[i].p),
           v2Id: getVertexId(ptsOnSeg[i+1].p),
-          faceId: seg.faceId
+          faceId: seg.faceId,
+          pathData: subPathData
         });
       }
     });
@@ -164,7 +194,7 @@ export class TopologicalEngine {
           id: edgeKey,
           v1Id: fe.v1Id,
           v2Id: fe.v2Id,
-          pathData: `M ${this.vertices.get(fe.v1Id)!.point.x} ${this.vertices.get(fe.v1Id)!.point.y} L ${this.vertices.get(fe.v2Id)!.point.x} ${this.vertices.get(fe.v2Id)!.point.y}`,
+          pathData: fe.pathData,
           faceAId: fe.faceId,
           faceBId: null,
           isMerged: false
@@ -301,9 +331,10 @@ export class TopologicalEngine {
     const DIST_TIE_EPS = 1e-3;
     const edgeLengths = edgeIds.map(eid => {
       const edge = this.edges.get(eid)!;
-      const v1 = this.vertices.get(edge.v1Id)!.point;
-      const v2 = this.vertices.get(edge.v2Id)!.point;
-      return v1.getDistance(v2);
+      const path = new paper.Path(edge.pathData);
+      const len = path.length;
+      path.remove();
+      return len;
     });
     const totalLength = edgeLengths.reduce((a, b) => a + b, 0);
 
@@ -329,18 +360,19 @@ export class TopologicalEngine {
     for (let i = 0; i < edgeIds.length; i++) {
       const eid = edgeIds[i];
       const edge = this.edges.get(eid)!;
-      const v1 = this.vertices.get(edge.v1Id)!.point;
-      const v2 = this.vertices.get(edge.v2Id)!.point;
-      const vec = v2.subtract(v1);
-      const lenSq = vec.dot(vec);
-      if (lenSq < 1e-12) continue;
+      const edgePath = new paper.Path(edge.pathData);
+      const len = edgePath.length;
+      if (len < 1e-6) {
+        edgePath.remove();
+        continue;
+      }
 
-      const t = Math.max(0, Math.min(1, anchor.subtract(v1).dot(vec) / lenSq));
-      const closest = v1.add(vec.multiply(t));
-      const d = anchor.getDistance(closest);
-      const len = edgeLengths[i];
+      const nearest = edgePath.getNearestPoint(anchor);
+      const d = anchor.getDistance(nearest);
+      const t = edgePath.getOffsetOf(nearest) / len;
       const arcPos = cumulative + t * len;
       cumulative += len;
+      edgePath.remove();
 
       cands.push({ eid, t, dist: d, arcPos });
     }
@@ -375,9 +407,10 @@ export class TopologicalEngine {
     let totalLength = 0;
     const edgeLengths = edgeIds.map(eid => {
       const edge = this.edges.get(eid)!;
-      const v1 = this.vertices.get(edge.v1Id)!.point;
-      const v2 = this.vertices.get(edge.v2Id)!.point;
-      return v1.getDistance(v2);
+      const path = new paper.Path(edge.pathData);
+      const len = path.length;
+      path.remove();
+      return len;
     });
     edgeLengths.forEach(len => { totalLength += len; });
 
@@ -540,13 +573,9 @@ export class TopologicalEngine {
    */
   private getEdgePath(edgeId: string, reversed: boolean): paper.Path {
     const edge = this.edges.get(edgeId)!;
-    const v1 = this.vertices.get(edge.v1Id)!.point;
-    const v2 = this.vertices.get(edge.v2Id)!.point;
     
     if (!edge.connectors || edge.connectors.length === 0) {
-      const path = new paper.Path();
-      path.add(v1);
-      path.add(v2);
+      const path = new paper.Path(edge.pathData);
       if (reversed) path.reverse();
       return path;
     }
@@ -555,32 +584,31 @@ export class TopologicalEngine {
     const sorted = [...edge.connectors].sort((a, b) => a.u - b.u);
     
     // We'll build a new path by splicing connectors into the original edge
-    const newPath = new paper.Path();
-    newPath.add(v1);
+    const edgePath = new paper.Path(edge.pathData);
+    const totalLen = edgePath.length;
     
-    const vec = v2.subtract(v1);
-    const tangent = vec.normalize();
-    const angle = tangent.angle;
-
+    const newPath = new paper.Path();
+    newPath.add(edgePath.firstSegment.point.clone());
+    
     sorted.forEach(c => {
-      const pos = v1.add(vec.multiply(c.u));
+      const offset = c.u * totalLen;
+      const pos = edgePath.getPointAt(offset);
+      const tangent = edgePath.getTangentAt(offset);
+      const angle = tangent.angle;
+      
       const stamp = new paper.Path(c.stampPathData);
       
       // Convention: raw stamp points RIGHT (0 degrees)
       // side = 1 means point into A (-90 relative to tangent)
       // side = -1 means point into B (+90 relative to tangent)
-      // If owner is Face A, it should point into Face B, so side = -1.
-      // If owner is Face B, it should point into Face A, so side = 1.
       let side = (c.ownerFaceId === edge.faceAId) ? -1 : 1;
       
       const rotation = angle - 90 * side;
       stamp.rotate(rotation, new paper.Point(0, 0));
       stamp.translate(pos);
       
-      // Ensure the stamp is open and remove the base segment for splicing
       stamp.closed = false;
       
-      // Determine which end of the stamp is closer to our current position
       const d1 = stamp.firstSegment.point.getDistance(newPath.lastSegment.point);
       const d2 = stamp.lastSegment.point.getDistance(newPath.lastSegment.point);
       
@@ -588,18 +616,12 @@ export class TopologicalEngine {
         stamp.reverse();
       }
       
-      // Now stamp is oriented correctly: firstSegment is entry, lastSegment is exit
-      // We want to add all segments of the stamp to our edge path
-      // IMPORTANT: We use addSegments to preserve all handles and curve information.
-      // We clone the segments to avoid modifying the original stamp.
-      const segmentsToAdd = stamp.segments.map(s => s.clone());
-      newPath.addSegments(segmentsToAdd);
-      
+      newPath.addSegments(stamp.segments.map(s => s.clone()));
       stamp.remove();
     });
     
-    // Add the final segment to the end of the edge
-    newPath.add(v2);
+    newPath.add(edgePath.lastSegment.point.clone());
+    edgePath.remove();
     
     if (reversed) newPath.reverse();
     return newPath;

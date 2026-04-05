@@ -107,11 +107,10 @@ function applyBooleanConnectorStampsToPiecesCore(
       const areaA = topology[c.areaAId];
       const areaB = topology[c.areaBId];
       if (!areaA || !areaB) return null;
-      const shared = getSharedPerimeter(areaA, areaB);
-      if (!shared) return null;
 
-      const pos = getPointAtU(shared, c.u);
-      shared.remove();
+      const pathA = pathItemFromBoundaryData(areaA.boundary);
+      const pos = getPointAtU(pathA, c.u);
+      pathA.remove();
       if (!pos) return null;
 
       const { ownerLeafId, neighborLeafId } = connectorOwnerNeighborLeafIds(c);
@@ -247,11 +246,10 @@ function applyBooleanConnectorDisplayPiecesCore(
       const areaA = topology[c.areaAId];
       const areaB = topology[c.areaBId];
       if (!areaA || !areaB) return null;
-      const shared = getSharedPerimeter(areaA, areaB);
-      if (!shared) return null;
 
-      const pos = getPointAtU(shared, c.u);
-      shared.remove();
+      const pathA = pathItemFromBoundaryData(areaA.boundary);
+      const pos = getPointAtU(pathA, c.u);
+      pathA.remove();
       if (!pos) return null;
 
       const { ownerLeafId, neighborLeafId } = connectorOwnerNeighborLeafIds(c);
@@ -368,11 +366,10 @@ function buildConnectorOverlaysCore(
     const areaA = topology[c.areaAId];
     const areaB = topology[c.areaBId];
     if (!areaA || !areaB) continue;
-    const shared = getSharedPerimeter(areaA, areaB);
-    if (!shared) continue;
 
-    const pos = getPointAtU(shared, c.u);
-    shared.remove();
+    const pathA = pathItemFromBoundaryData(areaA.boundary);
+    const pos = getPointAtU(pathA, c.u);
+    pathA.remove();
     if (!pos) continue;
 
     const { ownerLeafId, neighborLeafId } = connectorOwnerNeighborLeafIds(c);

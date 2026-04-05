@@ -139,9 +139,17 @@ export function generateGridPoints(width: number, height: number, rows: number, 
   
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      const x = offsetX + (c + 0.5) * dx + (Math.random() - 0.5) * jitter * dx;
-      const y = offsetY + (r + 0.5) * dy + (Math.random() - 0.5) * jitter * dy;
-      points.push({ x, y });
+      // Use high precision for grid centers to ensure Voronoi produces clean squares
+      const baseX = offsetX + (c + 0.5) * dx;
+      const baseY = offsetY + (r + 0.5) * dy;
+      
+      const x = baseX + (Math.random() - 0.5) * jitter * dx;
+      const y = baseY + (Math.random() - 0.5) * jitter * dy;
+      
+      points.push({ 
+        x: Math.round(x * 1000) / 1000, 
+        y: Math.round(y * 1000) / 1000 
+      });
     }
   }
   return points;
@@ -295,38 +303,120 @@ function sharedPerimeterFromCurveIntersections(areaA: Area, areaB: Area, tol: nu
   return result;
 }
 
+/**
+ * Gets the total offset of a location along a PathItem (handles CompoundPath).
+ */
+export function getTotalOffset(path: paper.PathItem, loc: paper.CurveLocation | null): number {
+  if (!loc) return 0;
+  if (path instanceof paper.Path) return loc.offset;
+  if (path instanceof paper.CompoundPath) {
+    let total = 0;
+    const children = path.children.filter(c => c instanceof paper.Path) as paper.Path[];
+    for (const child of children) {
+      if (child === loc.path) return total + loc.offset;
+      total += child.length;
+    }
+  }
+  return loc.offset;
+}
+
+/**
+ * Splits a path into multiple segments at the given points.
+ */
+function splitPathAtPoints(path: paper.Path, points: paper.Point[], tol: number): paper.Path[] {
+  const temp = path.clone() as paper.Path;
+  let locs = points
+    .map(pt => temp.getNearestLocation(pt))
+    .filter(l => l !== null)
+    .sort((a, b) => a.offset - b.offset);
+
+  // Dedupe locations by offset
+  const uniqueLocs: paper.CurveLocation[] = [];
+  for (const loc of locs) {
+    if (!uniqueLocs.some(ul => Math.abs(ul.offset - loc.offset) < tol)) {
+      uniqueLocs.push(loc);
+    }
+  }
+
+  if (temp.closed && uniqueLocs.length > 0) {
+    // Open the path at the first split point
+    const first = uniqueLocs[0];
+    temp.splitAt(first);
+    // Re-calculate locations on the now-open path
+    const pts = uniqueLocs.map(l => l.point);
+    const newLocs = pts
+      .map(pt => temp.getNearestLocation(pt))
+      .filter(l => l !== null)
+      .sort((a, b) => b.offset - a.offset); // Descending for splitting open path
+    
+    const parts: paper.Path[] = [];
+    let current = temp;
+    for (const loc of newLocs) {
+      if (loc.offset < 0.01 || loc.offset > current.length - 0.01) continue;
+      const tail = current.splitAt(loc);
+      if (tail) parts.push(tail);
+    }
+    parts.push(current);
+    return parts;
+  } else {
+    // Already open path
+    const sortedLocs = uniqueLocs.sort((a, b) => b.offset - a.offset);
+    const parts: paper.Path[] = [];
+    let current = temp;
+    for (const loc of sortedLocs) {
+      if (loc.offset < 0.01 || loc.offset > current.length - 0.01) continue;
+      const tail = current.splitAt(loc);
+      if (tail) parts.push(tail);
+    }
+    parts.push(current);
+    return parts;
+  }
+}
+
 export function getSharedPerimeter(areaA: Area, areaB: Area): paper.PathItem | null {
   const topA = pathItemFromBoundaryData(areaA.boundary);
   const topB = pathItemFromBoundaryData(areaB.boundary);
+  
+  if (!topA || !topB) {
+    topA?.remove();
+    topB?.remove();
+    return null;
+  }
+
+  const TOLERANCE = 1.5;
+  if (!topA.bounds.clone().expand(TOLERANCE * 2).intersects(topB.bounds)) {
+    topA.remove();
+    topB.remove();
+    return null;
+  }
+
   const pathsA = contourPathsForSegments(topA);
   const pathsB = contourPathsForSegments(topB);
-  if (pathsA.length === 0 || pathsB.length === 0) {
-    topA.remove();
-    topB.remove();
-    return null;
-  }
+  
+  const splitPoints: paper.Point[] = [];
 
-  pathsA.forEach(p => p.flatten(2));
-  pathsB.forEach(p => p.flatten(2));
-
-  // Quick bounding-box pre-check (compound / path both have .bounds)
-  const expandedA = topA.bounds.clone().expand(2);
-  if (!expandedA.intersects(topB.bounds)) {
-    topA.remove();
-    topB.remove();
-    return null;
-  }
-
-  // Vertex–vertex matches (shared corners).
-  const TOLERANCE = 2.5;
-  const sharedPoints: paper.Point[] = [];
-
-  for (const pathA of pathsA) {
-    for (const pathB of pathsB) {
-      for (const segA of pathA.segments) {
-        for (const segB of pathB.segments) {
-          if (segA.point.getDistance(segB.point) < TOLERANCE) {
-            sharedPoints.push(segA.point.clone());
+  for (const pA of pathsA) {
+    for (const pB of pathsB) {
+      // 1. Intersections
+      const intersections = pA.getIntersections(pB);
+      for (const is of intersections) splitPoints.push(is.point);
+      
+      // 2. Vertices of A on B
+      for (const seg of pA.segments) {
+        for (const targetB of pathsB) {
+          const nearest = targetB.getNearestPoint(seg.point);
+          if (nearest.getDistance(seg.point) < TOLERANCE) {
+            splitPoints.push(seg.point);
+            break;
+          }
+        }
+      }
+      // 3. Vertices of B on A
+      for (const seg of pB.segments) {
+        for (const targetA of pathsA) {
+          const nearest = targetA.getNearestPoint(seg.point);
+          if (nearest.getDistance(seg.point) < TOLERANCE) {
+            splitPoints.push(seg.point);
             break;
           }
         }
@@ -334,43 +424,29 @@ export function getSharedPerimeter(areaA: Area, areaB: Area): paper.PathItem | n
     }
   }
 
-  // T-junctions / partial overlaps: a vertex of one polygon can lie in the interior of the
-  // other’s edge (no matching vertex on the neighbor). Also collect segment–segment
-  // crossings and collinear overlaps (shared sub-edges).
-  const segsA = pathsA.flatMap(p => getClosedPathSegments(p));
-  const segsB = pathsB.flatMap(p => getClosedPathSegments(p));
+  const sharedPaths: paper.Path[] = [];
 
-  for (const pathA of pathsA) {
-    for (const seg of pathA.segments) {
-      const v = seg.point;
-      for (const [a, b] of segsB) {
-        if (pointOnSegment(v, a, b, TOLERANCE)) {
-          sharedPoints.push(v.clone());
+  for (const pA of pathsA) {
+    const localSplits = splitPoints.filter(pt => pA.getNearestPoint(pt).getDistance(pt) < TOLERANCE);
+    const parts = splitPathAtPoints(pA, localSplits, 0.1);
+
+    for (const part of parts) {
+      if (part.length < 0.1) {
+        part.remove();
+        continue;
+      }
+      const mid = part.getPointAt(part.length / 2);
+      let isOnB = false;
+      for (const pB of pathsB) {
+        if (pB.getNearestPoint(mid).getDistance(mid) < TOLERANCE) {
+          isOnB = true;
           break;
         }
       }
-    }
-  }
-  for (const pathB of pathsB) {
-    for (const seg of pathB.segments) {
-      const v = seg.point;
-      for (const [a, b] of segsA) {
-        if (pointOnSegment(v, a, b, TOLERANCE)) {
-          sharedPoints.push(v.clone());
-          break;
-        }
-      }
-    }
-  }
-
-  for (const [a1, a2] of segsA) {
-    for (const [b1, b2] of segsB) {
-      if (segmentsCollinear(a1, a2, b1, b2, TOLERANCE)) {
-        const overlap = collinearSegmentOverlap(a1, a2, b1, b2, TOLERANCE);
-        for (const p of overlap) sharedPoints.push(p);
+      if (isOnB) {
+        sharedPaths.push(part);
       } else {
-        const hit = segmentIntersectionProper(a1, a2, b1, b2, TOLERANCE);
-        if (hit) sharedPoints.push(hit);
+        part.remove();
       }
     }
   }
@@ -378,38 +454,71 @@ export function getSharedPerimeter(areaA: Area, areaB: Area): paper.PathItem | n
   topA.remove();
   topB.remove();
 
-  let unique = dedupeSharedPoints(sharedPoints, TOLERANCE);
-  if (unique.length < 2) {
-    const fallback = sharedPerimeterFromCurveIntersections(areaA, areaB, TOLERANCE);
-    if (fallback) return fallback;
-    return null;
-  }
+  if (sharedPaths.length === 0) return null;
 
-  // Use the pair with greatest distance — chord along the shared interface.
-  let p1 = unique[0];
-  let p2 = unique[1];
-  let maxDist = p1.getDistance(p2);
+  // Sort sharedPaths based on their position on the original areaA boundary
+  const originalTopA = pathItemFromBoundaryData(areaA.boundary);
+  sharedPaths.sort((a, b) => {
+    const midA = a.getPointAt(a.length / 2);
+    const midB = b.getPointAt(b.length / 2);
+    const locA = originalTopA.getNearestLocation(midA);
+    const locB = originalTopA.getNearestLocation(midB);
+    return getTotalOffset(originalTopA, locA) - getTotalOffset(originalTopA, locB);
+  });
+  originalTopA.remove();
 
-  for (let i = 0; i < unique.length; i++) {
-    for (let j = i + 1; j < unique.length; j++) {
-      const d = unique[i].getDistance(unique[j]);
-      if (d > maxDist) {
-        maxDist = d;
-        p1 = unique[i];
-        p2 = unique[j];
+  // Join contiguous segments
+  let joined = true;
+  while (joined && sharedPaths.length > 1) {
+    joined = false;
+    for (let i = 0; i < sharedPaths.length; i++) {
+      for (let j = 0; j < sharedPaths.length; j++) {
+        if (i === j) continue;
+        const p1 = sharedPaths[i];
+        const p2 = sharedPaths[j];
+        
+        // Check all 4 connection possibilities (p1-end to p2-start, p1-end to p2-end, etc.)
+        if (p1.lastSegment.point.getDistance(p2.firstSegment.point) < 0.1) {
+          p1.join(p2);
+          sharedPaths.splice(j, 1);
+          joined = true;
+          break;
+        } else if (p1.lastSegment.point.getDistance(p2.lastSegment.point) < 0.1) {
+          p2.reverse();
+          p1.join(p2);
+          sharedPaths.splice(j, 1);
+          joined = true;
+          break;
+        } else if (p1.firstSegment.point.getDistance(p2.firstSegment.point) < 0.1) {
+          p1.reverse();
+          p1.join(p2);
+          sharedPaths.splice(j, 1);
+          joined = true;
+          break;
+        } else if (p1.firstSegment.point.getDistance(p2.lastSegment.point) < 0.1) {
+          p2.join(p1);
+          sharedPaths.splice(i, 1);
+          joined = true;
+          break;
+        }
       }
+      if (joined) break;
     }
   }
 
-  if (maxDist < 1) return null;
+  // Wrap-around join for closed paths
+  if (sharedPaths.length === 1) {
+    const p = sharedPaths[0];
+    if (p.firstSegment.point.getDistance(p.lastSegment.point) < 0.1) {
+      p.closed = true;
+    }
+  }
 
-  // Return a clean, open straight path from p1 → p2.
-  // getPointAtU on this path is a simple arc-length fraction of a straight line,
-  // so u=0 → p1, u=0.5 → midpoint, u=1 → p2.
-  const result = new paper.Path();
-  result.add(p1);
-  result.add(p2);
-  return result;
+  if (sharedPaths.length === 1) return sharedPaths[0];
+  
+  const compound = new paper.CompoundPath({});
+  compound.addChildren(sharedPaths);
+  return compound;
 }
 
 /** Avoid u at exact endpoints of shared perimeters (topo engine / sampling edge cases). */
@@ -444,20 +553,152 @@ export function orientConnectorNormalTowardNeighbor(
 }
 
 /**
+ * Sorts the children of a CompoundPath such that their order matches their position along an original path.
+ * This ensures that the normalized 'u' value moves intuitively along the boundary.
+ */
+export function sortCompoundPathChildren(compound: paper.CompoundPath, original: paper.PathItem): paper.CompoundPath {
+  const children = compound.children.filter(c => c instanceof paper.Path) as paper.Path[];
+  children.sort((a, b) => {
+    const midA = a.getPointAt(a.length / 2);
+    const midB = b.getPointAt(b.length / 2);
+    const locA = original.getNearestLocation(midA);
+    const locB = original.getNearestLocation(midB);
+    return getTotalOffset(original, locA) - getTotalOffset(original, locB);
+  });
+  compound.removeChildren();
+  compound.addChildren(children);
+  return compound;
+}
+
+/**
  * Gets the point and normal at a normalized position 'u' along a path.
  */
 export function getPointAtU(path: paper.PathItem, u: number): { point: paper.Point; normal: paper.Point } | null {
   if (!path || path.isEmpty()) return null;
   
-  // Cast to Path or CompoundPath to access length and getPointAt
-  const p = path as paper.Path;
-  const length = p.length;
   const uu = clampConnectorU(u);
-  const offset = uu * length;
-  const point = p.getPointAt(offset);
-  const normal = p.getNormalAt(offset);
   
-  return { point, normal };
+  if (path instanceof paper.CompoundPath) {
+    const children = path.children.filter(c => c instanceof paper.Path) as paper.Path[];
+    if (children.length === 0) return null;
+    
+    const lengths = children.map(c => c.length);
+    const totalLen = lengths.reduce((a, b) => a + b, 0);
+    let offset = uu * totalLen;
+    
+    for (let i = 0; i < children.length; i++) {
+      if (offset <= lengths[i] + 0.0001) {
+        // Ensure offset is within child bounds
+        const childOffset = Math.max(0, Math.min(children[i].length, offset));
+        return {
+          point: children[i].getPointAt(childOffset),
+          normal: children[i].getNormalAt(childOffset)
+        };
+      }
+      offset -= lengths[i];
+    }
+    // Fallback to last point of last child
+    const last = children[children.length - 1];
+    return { point: last.lastSegment.point, normal: last.getNormalAt(last.length) };
+  } else {
+    const p = path as paper.Path;
+    const offset = uu * p.length;
+    return {
+      point: p.getPointAt(offset),
+      normal: p.getNormalAt(offset)
+    };
+  }
+}
+
+/**
+ * Checks if two paths are touching or intersecting within a tolerance.
+ * It avoids returning true for paths that only share a single point (diagonal touch).
+ */
+export function pathsTouch(a: paper.PathItem, b: paper.PathItem, tol: number = 1.0): boolean {
+  // 1. Check boolean intersection length
+  const inter = a.intersect(b);
+  const interLen = (inter as any).length || 0;
+  inter.remove();
+  
+  // If they share an edge of significant length, they touch.
+  if (interLen > tol) return true;
+  
+  // If they intersect but only at a point (or very short segment), they don't "touch" for merging.
+  if (interLen > 0) return false;
+
+  // 2. Check for parallel gap (they don't intersect)
+  // We use the center of the bounds as a hint for the nearest point search
+  const pA = a.getNearestPoint(b.bounds.center);
+  if (!pA) return false;
+  const pB = b.getNearestPoint(pA);
+  if (!pB) return false;
+  const dist = pA.getDistance(pB);
+  
+  if (dist < tol) {
+    // They are close at at least one point.
+    // Check if they are close along an edge by sampling nearby points along the boundary.
+    const loc = a.getNearestLocation(pA);
+    if (loc && loc.path) {
+      const path = loc.path;
+      const offset = loc.offset;
+      // Sample 2px away in both directions
+      const testOffsets = [offset - 2, offset + 2];
+      let closeCount = 0;
+      for (const off of testOffsets) {
+        let tOff = off;
+        if (path.closed) {
+          tOff = (off + path.length) % path.length;
+        } else {
+          tOff = Math.max(0, Math.min(path.length, off));
+        }
+        const pTest = path.getPointAt(tOff);
+        const nearestOnB = b.getNearestPoint(pTest);
+        if (nearestOnB && nearestOnB.getDistance(pTest) < tol + 0.5) {
+          closeCount++;
+        }
+      }
+      // If both nearby points are also close, it's an edge gap.
+      if (closeCount >= 2) return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Finds the neighbor piece at a specific position 'u' along areaA's boundary.
+ */
+export function findNeighborAt(
+  areaA: Area,
+  u: number,
+  topology: Record<string, Area>,
+  width: number,
+  height: number
+): string | null {
+  const pathA = pathItemFromBoundaryData(areaA.boundary);
+  const pos = getPointAtU(pathA, u);
+  pathA.remove();
+  if (!pos) return null;
+
+  const testPoint = pos.point;
+  const leafAreas = Object.values(topology).filter(a => a.isPiece && a.id !== areaA.id);
+
+  let bestNeighbor: string | null = null;
+  let minDist = 2.0; // Tolerance in pixels
+
+  for (const areaB of leafAreas) {
+    const pathB = pathItemFromBoundaryData(areaB.boundary);
+    const nearest = pathB.getNearestPoint(testPoint);
+    const dist = nearest.getDistance(testPoint);
+    pathB.remove();
+    
+    if (dist < minDist) {
+      minDist = dist;
+      bestNeighbor = areaB.id;
+    }
+  }
+  
+  return bestNeighbor;
 }
 
 /**
@@ -537,16 +778,18 @@ export function resolveCollisions(connectors: Connector[], areas: Record<string,
     if (c.isDormant) return null;
     
     const areaA = areas[c.areaAId];
-    const areaB = areas[c.areaBId];
-    const shared = getSharedPerimeter(areaA, areaB);
-    if (!shared) return null;
+    if (!areaA) return null;
     
-    const pos = getPointAtU(shared, c.u);
-    shared.remove();
+    const pathA = pathItemFromBoundaryData(areaA.boundary);
+    const pos = getPointAtU(pathA, c.u);
+    pathA.remove();
     if (!pos) return null;
     
-    // Use isFlipped to determine direction
-    const normal = c.isFlipped ? pos.normal.multiply(-1) : pos.normal;
+    const { neighborLeafId } = connectorOwnerNeighborLeafIds(c);
+    let normal = c.isFlipped ? pos.normal.multiply(-1) : pos.normal;
+    const nb = areas[neighborLeafId]?.boundary;
+    if (nb) normal = orientConnectorNormalTowardNeighbor(pos.point, normal, nb);
+    
     const stamp = createConnectorStamp(pos.point, normal, c.type, c.size);
     const bounds = stamp.bounds.clone();
     stamp.remove();

@@ -42,14 +42,14 @@ export function buildWhimsyStencilPathData(
 }
 
 /** Boolean ops on stars / complex stencils can return several disjoint surfaces; unite into one path per role. */
-function unitePaperPaths(paths: paper.Path[]): paper.Path[] {
+function unitePaperPaths(paths: paper.PathItem[]): paper.PathItem[] {
   if (paths.length <= 1) return paths;
   let acc = paths[0];
   for (let i = 1; i < paths.length; i++) {
     const u = acc.unite(paths[i]);
     acc.remove();
     paths[i].remove();
-    acc = u as paper.Path;
+    acc = u;
   }
   return [acc];
 }
@@ -105,10 +105,28 @@ function collectRemainderPathsFromSubtract(item: paper.PathItem | null): paper.P
   return [];
 }
 
-function collectSurfacePaths(item: paper.PathItem | null): paper.Path[] {
+function collectSurfacePaths(item: paper.PathItem | null): paper.PathItem[] {
   if (!item) return [];
   const reduced = item.reduce({ insert: false }) as paper.PathItem;
   if (reduced instanceof paper.CompoundPath) {
+    const n = reduced.children.length;
+    let sumAbs = 0;
+    let hasNegativeAreaChild = false;
+    for (let i = 0; i < n; i++) {
+      const ch = reduced.children[i] as paper.Path;
+      if (!ch) continue;
+      sumAbs += Math.abs(ch.area);
+      if (ch.area < -EPS_AREA) hasNegativeAreaChild = true;
+    }
+    const netAbs = Math.abs(reduced.area);
+    const looksLikeRingOrHole = n >= 2 && netAbs < sumAbs - EPS_AREA;
+
+    if (hasNegativeAreaChild || looksLikeRingOrHole || n === 1) {
+      const pathData = reduced.pathData;
+      reduced.remove();
+      return [pathItemFromBoundaryData(pathData)];
+    }
+
     const out: paper.Path[] = [];
     for (let i = 0; i < reduced.children.length; i++) {
       const ch = reduced.children[i] as paper.Path;
@@ -117,7 +135,7 @@ function collectSurfacePaths(item: paper.PathItem | null): paper.Path[] {
       }
     }
     reduced.remove();
-    return out;
+    return unitePaperPaths(out);
   }
   if (reduced instanceof paper.Path) {
     if (Math.abs(reduced.area) <= EPS_AREA) {
@@ -126,17 +144,7 @@ function collectSurfacePaths(item: paper.PathItem | null): paper.Path[] {
     }
     const pathData = reduced.pathData;
     reduced.remove();
-    const parsed = pathItemFromBoundaryData(pathData);
-    if (parsed instanceof paper.CompoundPath) {
-      const split: paper.Path[] = [];
-      for (let i = 0; i < parsed.children.length; i++) {
-        const ch = parsed.children[i] as paper.Path;
-        if (ch && Math.abs(ch.area) > EPS_AREA) split.push(new paper.Path(ch.pathData));
-      }
-      parsed.remove();
-      return split.length ? unitePaperPaths(split) : [];
-    }
-    return [parsed as paper.Path];
+    return [pathItemFromBoundaryData(pathData)];
   }
   reduced.remove();
   return [];
@@ -197,7 +205,7 @@ function unionClusterBoundaries(leaves: Area[]): paper.PathItem {
 
 function leafOverlapsStencil(leaf: Area, stencil: paper.Path): boolean {
   const lp = pathItemFromBoundaryData(leaf.boundary);
-  const sb = stencil.bounds;
+  const sb = stencil.bounds.clone().expand(1); // Add 1px buffer for robustness
   if (!lp.bounds.intersects(sb)) {
     lp.remove();
     return false;
@@ -206,7 +214,13 @@ function leafOverlapsStencil(leaf: Area, stencil: paper.Path): boolean {
   const hit = lp.intersect(st);
   let a = 0;
   if (hit) {
-    a = Math.abs(hit instanceof paper.Path ? hit.area : (hit as paper.CompoundPath).area);
+    if (hit instanceof paper.CompoundPath) {
+      hit.children.forEach(ch => {
+        a += Math.abs((ch as paper.Path).area);
+      });
+    } else if (hit instanceof paper.Path) {
+      a = Math.abs(hit.area);
+    }
   }
   hit?.remove();
   lp.remove();
@@ -285,7 +299,7 @@ function applyAddWhimsyOpLegacy(
   }
 
   const whimsyPath = whimsyPaths[0];
-  const whimsyArea = Math.abs(whimsyPath.area);
+  const whimsyArea = Math.abs((whimsyPath as paper.Path).area);
   const minAllowed = Math.max(WHIMSY_MIN_AREA_ABS, materialArea * WHIMSY_MIN_FRAC_OF_MATERIAL);
 
   if (whimsyArea < minAllowed) {
@@ -401,13 +415,21 @@ export function applyAddWhimsyOp(
   stencil.reorient(true, true);
 
   const leaves = (Object.values(areas) as Area[]).filter(a => a.isPiece);
-  const participating = leaves.filter(l => leafOverlapsStencil(l, stencil)).sort((a, b) => a.id.localeCompare(b.id));
+        const participating = leaves.filter(l => leafOverlapsStencil(l, stencil)).sort((a, b) => a.id.localeCompare(b.id));
 
   if (participating.length === 0) {
     stencil.remove();
     warnings.push('Whimsy does not overlap any piece; nothing added.');
     return { warnings, remainderClusters: [] };
   }
+
+  // Create the whimsy piece by intersecting the stencil with the union of ALL participating material.
+  // This prevents internal edges (the "cross" inside a circle) when the whimsy spans multiple pieces.
+  const totalMaterial = unionClusterBoundaries(participating);
+  const stForWhimsy = stencil.clone({ insert: true }) as paper.Path;
+  const whimsyRaw = totalMaterial.intersect(stForWhimsy);
+  totalMaterial.remove();
+  stForWhimsy.remove();
 
   const clusterMap = new Map<string, Area[]>();
   for (const leaf of participating) {
@@ -421,21 +443,7 @@ export function applyAddWhimsyOp(
 
   const clusterAnchorReps = clusters.map(c => find(c[0].id));
 
-  let materialSum = 0;
-  for (const cluster of clusters) {
-    if (cluster.length === 1) {
-      const p = pathItemFromBoundaryData(cluster[0].boundary);
-      materialSum += absPathItemArea(p);
-      p.remove();
-    } else {
-      const u = unionClusterBoundaries(cluster);
-      materialSum += absPathItemArea(u);
-      u.remove();
-    }
-  }
-
-  const whimsyParts: paper.Path[] = [];
-  const remainderSpecs: { parentId: string; path: paper.PathItem; clusterIndex: number }[] = [];
+  const remainderSpecs: { parentId: string; path: paper.PathItem; clusterIndex: number; originalType?: AreaType }[] = [];
 
   for (let ci = 0; ci < clusters.length; ci++) {
     const cluster = clusters[ci];
@@ -443,45 +451,50 @@ export function applyAddWhimsyOp(
       cluster.length === 1
         ? pathItemFromBoundaryData(cluster[0].boundary)
         : unionClusterBoundaries(cluster);
-    const st1 = stencil.clone({ insert: true }) as paper.Path;
     const st2 = stencil.clone({ insert: true }) as paper.Path;
-    const wRaw = mat.intersect(st1);
     const rRaw = mat.subtract(st2);
     mat.remove();
-    st1.remove();
     st2.remove();
-
-    let wPaths = collectSurfacePaths(wRaw);
-    wPaths = unitePaperPaths(wPaths);
-    wPaths.forEach(p => whimsyParts.push(p));
 
     const rPaths = collectRemainderPathsFromSubtract(rRaw);
     const parentForRemainder = lowestCommonAncestor(
       areas,
       cluster.map(l => l.id)
     );
+    // If the cluster was a whimsy, preserve its type in the remainder
+    const originalType = cluster.length === 1 ? cluster[0].type : undefined;
+
     rPaths.forEach(rp => {
-      remainderSpecs.push({ parentId: parentForRemainder, path: rp, clusterIndex: ci });
+      remainderSpecs.push({ parentId: parentForRemainder, path: rp, clusterIndex: ci, originalType });
     });
   }
 
   stencil.remove();
 
-  if (whimsyParts.length === 0) {
+  if (!whimsyRaw || whimsyRaw.isEmpty()) {
+    whimsyRaw?.remove();
+    remainderSpecs.forEach(s => s.path.remove());
     warnings.push('Whimsy overlap was empty after boolean ops.');
     return { warnings, remainderClusters: [] };
   }
 
-  let whimsyUnified: paper.Path = whimsyParts[0];
-  for (let i = 1; i < whimsyParts.length; i++) {
-    const u = whimsyUnified.unite(whimsyParts[i]);
-    whimsyUnified.remove();
-    whimsyParts[i].remove();
-    whimsyUnified = u as paper.Path;
+  let whimsyPaths = collectSurfacePaths(whimsyRaw);
+  whimsyPaths = unitePaperPaths(whimsyPaths);
+  const whimsyUnified = whimsyPaths[0];
+
+  if (!whimsyUnified) {
+    whimsyRaw.remove();
+    remainderSpecs.forEach(s => s.path.remove());
+    warnings.push('Whimsy overlap was empty after boolean ops.');
+    return { warnings, remainderClusters: [] };
   }
 
-  const whimsyArea = Math.abs(whimsyUnified.area);
-  const minAllowed = Math.max(WHIMSY_MIN_AREA_ABS, materialSum * WHIMSY_MIN_FRAC_OF_MATERIAL);
+  const whimsyArea = (whimsyUnified instanceof paper.CompoundPath)
+    ? whimsyUnified.children.reduce((acc, ch) => acc + Math.abs((ch as paper.Path).area), 0)
+    : Math.abs((whimsyUnified as paper.Path).area);
+  // materialSum is now whimsyArea + sum of all remainder areas, but we can just use the totalMaterial area from before.
+  // Actually, whimsyArea is the most accurate measure of the whimsy itself.
+  const minAllowed = WHIMSY_MIN_AREA_ABS; 
   if (whimsyArea < minAllowed) {
     whimsyUnified.remove();
     remainderSpecs.forEach(s => s.path.remove());
@@ -550,7 +563,7 @@ export function applyAddWhimsyOp(
     areas[rid] = {
       id: rid,
       parentId: spec.parentId,
-      type: AreaType.SUBDIVISION,
+      type: spec.originalType ?? AreaType.SUBDIVISION,
       children: [],
       boundary: spec.path.pathData,
       seedPoint: pathCentroid(spec.path),

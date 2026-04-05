@@ -18,7 +18,7 @@ import { getWhimsyTemplatePathData } from './whimsy_gallery';
 
 function pathAbsArea(pathData: string): number {
   const p = pathItemFromBoundaryData(pathData);
-  const a = Math.abs(p.area);
+  const a = Math.abs((p as paper.Path).area);
   p.remove();
   return a;
 }

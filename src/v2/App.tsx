@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import paper from 'paper';
 
 import { Point, Connector, Operation, CreateRootShape, WhimsyTemplateId } from './types';
-import { generateGridPoints, generateHexGridPoints, clampConnectorU, resolveSubdivideClipBoundary } from './geometry';
+import { generateGridPoints, generateHexGridPoints, clampConnectorU, resolveSubdivideClipBoundary, pathsTouch } from './geometry';
 import { useLongPress } from '../v1/hooks/useLongPress';
 
 import { usePuzzleEngine } from './hooks/usePuzzleEngine';
@@ -26,7 +26,7 @@ export default function V2App() {
   // --- State ---
   const containerRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState<Tab>('TOPOLOGY');
-  const [geometryEngine, setGeometryEngine] = useState<'BOOLEAN' | 'TOPOLOGICAL'>('TOPOLOGICAL');
+  const [geometryEngine, setGeometryEngine] = useState<'BOOLEAN' | 'TOPOLOGICAL'>('BOOLEAN');
   const [testResults, setTestResults] = useState<TestResult[]>([]);
   // Puzzle canvas dimensions — set once via creation modal
   const [showCreateModal, setShowCreateModal] = useState(true);
@@ -167,19 +167,46 @@ export default function V2App() {
     const group = members ?? [pieceId];
     const rep = group[0];
     const memberSet = new Set(group);
+
+    // Use Paper.js to find all neighbors that intersect the group's boundary
+    resetPaperProject(width, height);
+    let groupPath: paper.PathItem | null = null;
+    group.forEach(id => {
+      const area = topology[id];
+      if (!area) return;
+      const path = pathItemFromBoundaryData(area.boundary);
+      if (!groupPath) {
+        groupPath = path;
+      } else {
+        const next = groupPath.unite(path);
+        groupPath.remove();
+        path.remove();
+        groupPath = next;
+      }
+    });
+
+    if (!groupPath) return;
+
     const neighbors = new Set<string>();
-    for (const e of sharedEdges) {
-      if (e.isMerged) continue;
-      const aIn = memberSet.has(e.areaAId);
-      const bIn = memberSet.has(e.areaBId);
-      if (aIn && !bIn) neighbors.add(e.areaBId);
-      if (bIn && !aIn) neighbors.add(e.areaAId);
-    }
+    const leafIds = Object.keys(topology).filter(id => topology[id].isPiece && !memberSet.has(id));
+
+    leafIds.forEach(id => {
+      const area = topology[id];
+      const path = pathItemFromBoundaryData(area.boundary);
+      // Check for intersection or very close proximity
+      if (pathsTouch(groupPath!, path, 1.0)) {
+        neighbors.add(id);
+      }
+      path.remove();
+    });
+
+    groupPath.remove();
+
     neighbors.forEach(n => mergeAreas(rep, n));
     setMergePickIds([]);
     setSelectedId(null);
     setSelectedType('NONE');
-  }, [sharedEdges, mergedGroups, mergeAreas]);
+  }, [topology, mergedGroups, mergeAreas, width, height]);
 
   const buildSubdivideOperation = useCallback((parentId: string, pattern: string, opId: string): Operation | null => {
     const parent = topology[parentId];
