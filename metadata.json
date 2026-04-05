@@ -1,0 +1,5 @@
+{
+  "name": "Jigsaw Puzzle Designer",
+  "description": "A professional tool for designing custom jigsaw puzzles with Voronoi patterns, whimsy pieces, and laser-cutter ready SVG export.",
+  "requestFramePermissions": []
+}
