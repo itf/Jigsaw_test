@@ -43,8 +43,13 @@ export function usePuzzleEngine({ width, height, history, activeTab, geometryEng
         const parent = areas[parentId];
         if (!parent) return;
 
+        // Use the parent's bounding box as the Voronoi extent so cells are
+        // tightly computed around the sub-area rather than the full puzzle.
+        const parentPath0 = new paper.Path(parent.boundary);
+        const pb = parentPath0.bounds;
+        parentPath0.remove();
         const delaunay = Delaunay.from(points.map((p: Point) => [p.x, p.y]));
-        const voronoi = delaunay.voronoi([0, 0, width, height]);
+        const voronoi = delaunay.voronoi([pb.x, pb.y, pb.x + pb.width, pb.y + pb.height]);
         
         const childIds: string[] = [];
         points.forEach((p: Point, i: number) => {
@@ -275,18 +280,25 @@ export function usePuzzleEngine({ width, height, history, activeTab, geometryEng
 
       resolvedConnectors.forEach(c => {
         if (c.isDeleted || c.isDormant) return;
-        
+
         const areaA = topology[c.areaAId];
         const areaB = topology[c.areaBId];
         if (!areaA || !areaB) return;
 
         const rawStamp = createConnectorStamp(new paper.Point(0, 0), new paper.Point(1, 0), c.type, c.size, undefined, 0.5);
-        
-        // Correct owner logic: if flipped, areaB owns it (sticks out of B into A)
-        const ownerFaceId = c.isFlipped ? c.areaBId : c.areaAId;
-        engine.addConnectorToBoundary(c.areaAId, c.areaBId, c.u, rawStamp.pathData, c.isFlipped, ownerFaceId);
-        
+        const stampPathData = rawStamp.pathData;
         rawStamp.remove();
+
+        // Same anchor as boolean mode + Connection preview: u along getSharedPerimeter chord,
+        // then snap to the topological polyline so the cut aligns with the purple anchor dot.
+        const shared = getSharedPerimeter(areaA, areaB);
+        if (!shared) return;
+        const pos = getPointAtU(shared, c.u);
+        shared.remove();
+        if (!pos) return;
+
+        const ownerFaceId = c.isFlipped ? c.areaBId : c.areaAId;
+        engine.addConnectorAtAnchor(c.areaAId, c.areaBId, pos.point, stampPathData, c.isFlipped, ownerFaceId);
       });
 
       const pieces: { id: string; pathData: string; color: string }[] = [];

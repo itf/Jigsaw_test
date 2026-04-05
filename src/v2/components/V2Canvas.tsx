@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import paper from 'paper';
+import { Maximize2, Minus, Plus } from 'lucide-react';
 import { Tab } from '../constants';
 import { Area, Connector } from '../types';
 import { getSharedPerimeter, getPointAtU } from '../geometry';
@@ -7,7 +8,7 @@ import { getSharedPerimeter, getPointAtU } from '../geometry';
 interface V2CanvasProps {
   width: number;
   height: number;
-  scale: number;
+  fitScale: number;
   isMobile: boolean;
   activeTab: Tab;
   displayPieces: { id: string; pathData: string; color: string }[];
@@ -28,7 +29,7 @@ interface V2CanvasProps {
 export const V2Canvas: React.FC<V2CanvasProps> = ({
   width,
   height,
-  scale,
+  fitScale,
   isMobile,
   activeTab,
   displayPieces,
@@ -43,31 +44,198 @@ export const V2Canvas: React.FC<V2CanvasProps> = ({
   addConnector,
   setSelectedId,
   setSelectedType,
-  longPressProps
+  longPressProps,
 }) => {
+  const outerRef = useRef<HTMLDivElement>(null);
+
+  // ── View state ────────────────────────────────────────────────────────────
+  const [zoom, setZoom] = useState(fitScale);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+
+  // Stable ref so non-React event listeners always read current values
+  const viewRef = useRef({ zoom, pan });
+  useEffect(() => { viewRef.current = { zoom, pan }; }, [zoom, pan]);
+
+  // ── Pan clamping ──────────────────────────────────────────────────────────
+  // At least MARGIN px of the puzzle must stay inside the viewport.
+  const MARGIN = 120;
+  const clampPan = useCallback((p: { x: number; y: number }, z: number) => {
+    const el = outerRef.current;
+    if (!el) return p;
+    const { width: cw, height: ch } = el.getBoundingClientRect();
+    return {
+      x: Math.min(cw - MARGIN, Math.max(MARGIN - width * z, p.x)),
+      y: Math.min(ch - MARGIN, Math.max(MARGIN - height * z, p.y)),
+    };
+  }, [width, height]);
+
+  // ── Fit to screen ─────────────────────────────────────────────────────────
+  const fitToScreen = useCallback(() => {
+    const el = outerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    setZoom(fitScale);
+    setPan({
+      x: (rect.width  - width  * fitScale) / 2,
+      y: (rect.height - height * fitScale) / 2,
+    });
+  }, [fitScale, width, height]);
+
+  // Center on first mount only
+  useEffect(() => { fitToScreen(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Zoom helpers ──────────────────────────────────────────────────────────
+  const MIN_ZOOM = fitScale * 0.1;
+  const MAX_ZOOM = fitScale * 10;
+
+  // Change zoom keeping viewport centre fixed
+  const applyZoom = useCallback((newZoom: number) => {
+    const el = outerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const cx = rect.width  / 2;
+    const cy = rect.height / 2;
+    const clamped = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, newZoom));
+    const ratio = clamped / viewRef.current.zoom;
+    const newPan = { x: cx - (cx - viewRef.current.pan.x) * ratio, y: cy - (cy - viewRef.current.pan.y) * ratio };
+    setPan(clampPan(newPan, clamped));
+    setZoom(clamped);
+  }, [MAX_ZOOM, MIN_ZOOM, clampPan]);
+
+  // ── Scroll = pan (non-passive so we can preventDefault) ───────────────────
+  useEffect(() => {
+    if (isMobile) return; // leave mobile scroll alone
+    const el = outerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const { pan: p, zoom: z } = viewRef.current;
+      const proposed = { x: p.x - e.deltaX, y: p.y - e.deltaY };
+      // clampPan reads outerRef directly so it's safe to call here
+      const rect = el.getBoundingClientRect();
+      const cw = rect.width, ch = rect.height;
+      setPan({
+        x: Math.min(cw - MARGIN, Math.max(MARGIN - width * z, proposed.x)),
+        y: Math.min(ch - MARGIN, Math.max(MARGIN - height * z, proposed.y)),
+      });
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [isMobile, width, height]);
+
+  // ── Drag-to-pan ───────────────────────────────────────────────────────────
+  const dragRef = useRef({
+    active: false,
+    startX: 0, startY: 0,
+    startPanX: 0, startPanY: 0,
+    moved: false,
+  });
+  const [isDragging, setIsDragging] = useState(false);
+
+  const onMouseDown = (e: React.MouseEvent) => {
+    if (isMobile) return;
+    // Left-button drag anywhere in the canvas, or middle-button on anything
+    if (e.button !== 0 && e.button !== 1) return;
+    dragRef.current = {
+      active: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      startPanX: viewRef.current.pan.x,
+      startPanY: viewRef.current.pan.y,
+      moved: false,
+    };
+  };
+
+  useEffect(() => {
+    if (isMobile) return;
+    const onMove = (e: MouseEvent) => {
+      const d = dragRef.current;
+      if (!d.active) return;
+      const dx = e.clientX - d.startX;
+      const dy = e.clientY - d.startY;
+      if (!d.moved && Math.hypot(dx, dy) > 4) {
+        d.moved = true;
+        setIsDragging(true);
+      }
+      if (d.moved) {
+        setPan(clampPan(
+          { x: d.startPanX + dx, y: d.startPanY + dy },
+          viewRef.current.zoom
+        ));
+      }
+    };
+    const onUp = () => {
+      dragRef.current.active = false;
+      setIsDragging(false);
+      // Note: deselection on background click is handled by onOuterClick below
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [isMobile]);
+
+  // Background click = deselect (only when not finishing a drag)
+  const onOuterClick = (e: React.MouseEvent) => {
+    if (dragRef.current.moved) {
+      dragRef.current.moved = false;
+      return;
+    }
+    // Pieces stop propagation, so if we're here it's a genuine background click
+    setSelectedId(null);
+    setSelectedType('NONE');
+  };
+
+  const pctLabel = Math.round((zoom / fitScale) * 100);
+
+  // One Paper pass per connector data change — avoids getSharedPerimeter N× per React render
+  // (e.g. dragging the u slider was rebuilding paths every frame).
+  const connectorAnchors = useMemo(() => {
+    if (activeTab !== 'CONNECTION' && activeTab !== 'RESOLUTION') return [];
+    paper.setup(new paper.Size(width, height));
+    const out: { id: string; x: number; y: number; isDeleted: boolean }[] = [];
+    for (const c of resolvedConnectors) {
+      const areaA = topology[c.areaAId];
+      const areaB = topology[c.areaBId];
+      if (!areaA || !areaB) continue;
+      const shared = getSharedPerimeter(areaA, areaB);
+      if (!shared) continue;
+      const pos = getPointAtU(shared, c.u);
+      shared.remove();
+      if (!pos) continue;
+      out.push({ id: c.id, x: pos.point.x, y: pos.point.y, isDeleted: !!c.isDeleted });
+    }
+    return out;
+  }, [activeTab, resolvedConnectors, topology, width, height]);
+
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div 
-      className={`min-h-[85vh] ${isMobile ? 'bg-white' : 'bg-slate-100'} relative flex items-center justify-center p-8 sm:p-12`} 
+    <div
+      ref={outerRef}
+      className="flex-1 overflow-hidden relative bg-slate-100 select-none"
+      style={{ cursor: isMobile ? undefined : isDragging ? 'grabbing' : 'grab' }}
+      onMouseDown={onMouseDown}
+      onClick={onOuterClick}
       {...longPressProps}
-      onClick={() => {
-        setSelectedId(null);
-        setSelectedType('NONE');
-      }}
     >
-      <div 
-        className={`${isMobile ? '' : 'bg-white shadow-2xl rounded-sm'} overflow-hidden relative origin-center shrink-0`}
-        style={{ 
-          width, 
+      {/* Puzzle board */}
+      <div
+        className="absolute origin-top-left bg-white shadow-2xl rounded-sm overflow-hidden"
+        style={{
+          width,
           height,
-          transform: `scale(${scale})`
+          transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
         }}
       >
-        <svg 
-          width="100%" 
-          height="100%" 
+        <svg
+          width="100%"
+          height="100%"
           viewBox={`0 0 ${width} ${height}`}
           className="w-full h-full"
         >
+          {/* Pieces */}
           <g>
             {displayPieces.map(piece => (
               <path
@@ -75,18 +243,24 @@ export const V2Canvas: React.FC<V2CanvasProps> = ({
                 d={piece.pathData}
                 fill={piece.color}
                 fillRule="evenodd"
-                stroke={activeTab === 'PRODUCTION' ? "none" : (activeTab === 'MODIFICATION' ? "none" : (selectedId === piece.id ? "#6366f1" : mergeSelection === piece.id ? "#f59e0b" : "#000"))}
-                strokeWidth={activeTab === 'PRODUCTION' ? "0" : (selectedId === piece.id || mergeSelection === piece.id ? "3" : "1")}
-                strokeDasharray={mergeSelection === piece.id ? "4 2" : "none"}
+                stroke={
+                  activeTab === 'PRODUCTION' ? 'none'
+                  : activeTab === 'MODIFICATION' ? 'none'
+                  : selectedId === piece.id ? '#6366f1'
+                  : mergeSelection === piece.id ? '#f59e0b'
+                  : '#000'
+                }
+                strokeWidth={selectedId === piece.id || mergeSelection === piece.id ? '3' : '1'}
+                strokeDasharray={mergeSelection === piece.id ? '4 2' : 'none'}
                 className="transition-all duration-300 hover:opacity-80 cursor-pointer"
                 onMouseEnter={() => setHoveredId(piece.id)}
                 onMouseLeave={() => setHoveredId(null)}
-                onClick={(e) => handleAreaClick(piece.id, e)}
+                onClick={(e) => { e.stopPropagation(); handleAreaClick(piece.id, e); }}
               />
             ))}
           </g>
 
-          {/* Shared Edges (Topological View) */}
+          {/* Shared Edges */}
           {(activeTab === 'TOPOLOGY' || activeTab === 'MODIFICATION' || activeTab === 'CONNECTION') && (
             <g>
               {sharedEdges.map(edge => (
@@ -94,33 +268,30 @@ export const V2Canvas: React.FC<V2CanvasProps> = ({
                   key={edge.id}
                   d={edge.pathData}
                   fill="none"
-                  stroke={edge.isMerged ? "none" : (selectedId === edge.id ? "#6366f1" : "#000")}
-                  strokeWidth={selectedId === edge.id ? "3" : "1"}
+                  stroke={edge.isMerged ? 'none' : selectedId === edge.id ? '#6366f1' : '#000'}
+                  strokeWidth={selectedId === edge.id ? '3' : '1'}
                   strokeLinecap="round"
-                  className={activeTab === 'CONNECTION' ? "cursor-crosshair" : "pointer-events-none"}
-                  style={{ 
-                    opacity: edge.isMerged ? 0 : (activeTab === 'CONNECTION' ? 0.8 : 0.2),
-                    pointerEvents: activeTab === 'CONNECTION' ? 'all' : 'none'
+                  style={{
+                    opacity: edge.isMerged ? 0 : activeTab === 'CONNECTION' ? 0.8 : 0.2,
+                    pointerEvents: activeTab === 'CONNECTION' ? 'all' : 'none',
+                    cursor: activeTab === 'CONNECTION' ? 'crosshair' : undefined,
                   }}
                   onMouseEnter={() => { if (activeTab === 'CONNECTION') { setHoveredId(edge.id); setHoveredType('EDGE'); } }}
                   onMouseLeave={() => { if (activeTab === 'CONNECTION') { setHoveredId(null); setHoveredType('NONE'); } }}
                   onClick={(e) => {
                     if (activeTab !== 'CONNECTION') return;
                     e.stopPropagation();
-                    
                     const svg = e.currentTarget.ownerSVGElement;
                     if (!svg) return;
                     const pt = svg.createSVGPoint();
                     pt.x = e.clientX;
                     pt.y = e.clientY;
                     const localPt = pt.matrixTransform(svg.getScreenCTM()?.inverse());
-                    
                     paper.setup(new paper.Size(width, height));
                     const path = new paper.Path(edge.pathData);
                     const nearest = path.getNearestLocation(new paper.Point(localPt.x, localPt.y));
                     const u = nearest.offset / path.length;
                     path.remove();
-                    
                     addConnector(edge.areaAId, edge.areaBId, u);
                   }}
                 />
@@ -131,41 +302,73 @@ export const V2Canvas: React.FC<V2CanvasProps> = ({
           {/* Connector Previews */}
           {(activeTab === 'CONNECTION' || activeTab === 'RESOLUTION') && (
             <g>
-              {resolvedConnectors.map(c => {
-                const areaA = topology[c.areaAId];
-                const areaB = topology[c.areaBId];
-                const shared = getSharedPerimeter(areaA, areaB);
-                if (!shared) return null;
-                const pos = getPointAtU(shared, c.u);
-                shared.remove();
-                if (!pos) return null;
-
-                return (
-                  <g 
-                    key={c.id} 
-                    opacity={c.isDeleted ? 0.3 : 1}
-                    className="cursor-pointer"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedId(c.id);
-                      setSelectedType('CONNECTOR');
-                    }}
-                  >
-                    <circle 
-                      cx={pos.point.x} 
-                      cy={pos.point.y} 
-                      r={selectedId === c.id ? 8 : 6} 
-                      fill={c.isDeleted ? "#ef4444" : "#6366f1"} 
-                      stroke="white"
-                      strokeWidth="2"
-                    />
-                  </g>
-                );
-              })}
+              {connectorAnchors.map(a => (
+                <g
+                  key={a.id}
+                  opacity={a.isDeleted ? 0.3 : 1}
+                  style={{ cursor: 'pointer' }}
+                  onClick={(e) => { e.stopPropagation(); setSelectedId(a.id); setSelectedType('CONNECTOR'); }}
+                >
+                  <circle
+                    cx={a.x}
+                    cy={a.y}
+                    r={selectedId === a.id ? 8 : 6}
+                    fill={a.isDeleted ? '#ef4444' : '#6366f1'}
+                    stroke="white"
+                    strokeWidth="2"
+                  />
+                </g>
+              ))}
             </g>
           )}
         </svg>
       </div>
+
+      {/* ── Zoom controls (desktop only) ─────────────────────────────── */}
+      {!isMobile && (
+        <div className="absolute bottom-4 left-4 flex items-center gap-2 bg-white rounded-xl shadow-md px-3 py-2 z-10">
+          <button
+            onClick={() => applyZoom(zoom / 1.25)}
+            className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors"
+            title="Zoom out"
+          >
+            <Minus className="w-3.5 h-3.5" />
+          </button>
+
+          <input
+            type="range"
+            min={MIN_ZOOM}
+            max={MAX_ZOOM}
+            step={(MAX_ZOOM - MIN_ZOOM) / 200}
+            value={zoom}
+            onChange={e => applyZoom(Number(e.target.value))}
+            className="w-24 h-1 accent-indigo-500 cursor-pointer"
+            title="Zoom"
+          />
+
+          <button
+            onClick={() => applyZoom(zoom * 1.25)}
+            className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors"
+            title="Zoom in"
+          >
+            <Plus className="w-3.5 h-3.5" />
+          </button>
+
+          <span className="text-[10px] font-bold text-slate-400 w-9 text-right tabular-nums">
+            {pctLabel}%
+          </span>
+
+          <div className="w-px h-4 bg-slate-100" />
+
+          <button
+            onClick={fitToScreen}
+            className="p-1 rounded-md hover:bg-slate-100 text-slate-400 hover:text-indigo-600 transition-colors"
+            title="Fit to screen"
+          >
+            <Maximize2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
     </div>
   );
 };

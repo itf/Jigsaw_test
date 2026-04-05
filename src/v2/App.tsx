@@ -1,19 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import paper from 'paper';
-import { motion, AnimatePresence } from 'motion/react';
-import { 
-  Plus, 
-  RotateCcw, 
-  Layers, 
-  RefreshCw,
-  Link as LinkIcon,
-  Zap,
-  Move,
-  Type,
-  Grid,
-  Hexagon,
-  Shuffle
-} from 'lucide-react';
 
 import { Point, AreaType, Connector, Operation } from './types';
 import { generateGridPoints, generateHexPoints } from './geometry';
@@ -24,7 +10,7 @@ import { V2Header } from './components/V2Header';
 import { V2Navigation } from './components/V2Navigation';
 import { V2ActionBar } from './components/V2ActionBar';
 import { V2Canvas } from './components/V2Canvas';
-import { V2QuickStart } from './components/V2QuickStart';
+import { V2CreateModal } from './components/V2CreateModal';
 import { V2TestResults } from './components/V2TestResults';
 import { Tab, COLORS } from './constants';
 import { runTopologicalTests, TestResult } from './utils/tests';
@@ -40,13 +26,15 @@ export default function V2App() {
   const [activeTab, setActiveTab] = useState<Tab>('TOPOLOGY');
   const [geometryEngine, setGeometryEngine] = useState<'BOOLEAN' | 'TOPOLOGICAL'>('TOPOLOGICAL');
   const [testResults, setTestResults] = useState<TestResult[]>([]);
-  const [width, setWidth] = useState(window.innerWidth);
-  const [height, setHeight] = useState(window.innerHeight - 168);
+  // Puzzle canvas dimensions — set once via creation modal
+  const [showCreateModal, setShowCreateModal] = useState(true);
+  const [width, setWidth] = useState(800);
+  const [height, setHeight] = useState(600);
   const [containerSize, setContainerSize] = useState({ w: window.innerWidth, h: window.innerHeight - 168 });
   const [history, setHistory] = useState<Operation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedType, setSelectedType] = useState<'AREA' | 'CONNECTOR' | 'NONE'>('NONE');
-  
+
   // Subdivision Parameters
   const [gridRows, setGridRows] = useState(4);
   const [gridCols, setGridCols] = useState(4);
@@ -72,12 +60,6 @@ export default function V2App() {
       for (const entry of entries) {
         const { width: newW, height: newH } = entry.contentRect;
         setContainerSize({ w: newW, h: newH });
-        
-        // Only update base dimensions if no work has started
-        if (history.length === 0) {
-          setWidth(newW);
-          setHeight(newH);
-        }
       }
     });
 
@@ -137,7 +119,7 @@ export default function V2App() {
       timestamp: Date.now()
     };
     setHistory(prev => [...prev, op]);
-  }, [width, height, gridRows, gridCols, randomPoints, hexSize]);
+  }, [topology, width, height, gridRows, gridCols, randomPoints, hexSize]);
 
   const mergeAreas = useCallback((areaAId: string, areaBId: string) => {
     const op: Operation = {
@@ -206,9 +188,23 @@ export default function V2App() {
 
   const scale = Math.min(containerSize.w / width, containerSize.h / height) * 0.9;
 
+  // Subdivide target: the selected area if it's a leaf, otherwise disabled
+  const subdivideTargetId = selectedType === 'AREA' && selectedId ? selectedId : null;
+  const canSubdivide = subdivideTargetId != null && (topology[subdivideTargetId]?.isPiece ?? false);
+
   return (
     <div className="flex flex-col h-screen bg-slate-50 overflow-hidden font-sans selection:bg-indigo-100">
-      <V2Header 
+      {showCreateModal && (
+        <V2CreateModal
+          onCreate={(w, h) => {
+            setWidth(w);
+            setHeight(h);
+            setShowCreateModal(false);
+          }}
+        />
+      )}
+
+      <V2Header
         geometryEngine={geometryEngine}
         setGeometryEngine={setGeometryEngine}
         runTests={() => setTestResults(runTopologicalTests())}
@@ -217,13 +213,17 @@ export default function V2App() {
 
       <V2Navigation activeTab={activeTab} setActiveTab={setActiveTab} />
 
-      <V2ActionBar 
+      <V2ActionBar
         activeTab={activeTab}
         isMobile={isMobile}
+        subdivideTargetId={subdivideTargetId ?? 'root'}
+        canSubdivide={canSubdivide}
         gridRows={gridRows}
         setGridRows={setGridRows}
         gridCols={gridCols}
         setGridCols={setGridCols}
+        hexSize={hexSize}
+        setHexSize={setHexSize}
         randomPoints={randomPoints}
         setRandomPoints={setRandomPoints}
         subdivide={subdivide}
@@ -241,10 +241,10 @@ export default function V2App() {
       />
 
       <main className="flex-1 relative overflow-hidden flex flex-col" ref={containerRef}>
-        <V2Canvas 
+        <V2Canvas
           width={width}
           height={height}
-          scale={scale}
+          fitScale={scale}
           isMobile={isMobile}
           activeTab={activeTab}
           displayPieces={finalPieces}
@@ -261,8 +261,6 @@ export default function V2App() {
           setSelectedType={setSelectedType}
           longPressProps={longPressProps}
         />
-
-        {history.length === 0 && <V2QuickStart subdivide={subdivide} />}
 
         <V2TestResults testResults={testResults} onClose={() => setTestResults([])} />
       </main>

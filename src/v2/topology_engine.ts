@@ -193,36 +193,124 @@ export class TopologicalEngine {
   }
 
   /**
-   * Adds a connector to a shared boundary between two faces.
-   * 'u' is relative to the total length of all shared edges.
+   * Orders shared edges into a contiguous chain from one end vertex to the other
+   * so arc-length parameterization matches geometric order along the interface.
    */
+  private sortSharedEdgesAsChain(edgeIds: string[]): string[] {
+    if (edgeIds.length <= 1) return [...edgeIds];
+
+    const touchCount = new Map<string, number>();
+    edgeIds.forEach(eid => {
+      const e = this.edges.get(eid)!;
+      touchCount.set(e.v1Id, (touchCount.get(e.v1Id) || 0) + 1);
+      touchCount.set(e.v2Id, (touchCount.get(e.v2Id) || 0) + 1);
+    });
+
+    let startV: string | null = null;
+    for (const [v, c] of touchCount) {
+      if (c === 1) {
+        startV = v;
+        break;
+      }
+    }
+    const e0 = this.edges.get(edgeIds[0])!;
+    if (!startV) startV = e0.v1Id;
+
+    const remaining = new Set(edgeIds);
+    const sorted: string[] = [];
+    let currentV = startV;
+
+    while (remaining.size > 0) {
+      let nextEid: string | null = null;
+      for (const eid of remaining) {
+        const e = this.edges.get(eid)!;
+        if (e.v1Id === currentV || e.v2Id === currentV) {
+          nextEid = eid;
+          break;
+        }
+      }
+      if (!nextEid) break;
+      remaining.delete(nextEid);
+      sorted.push(nextEid);
+      const e = this.edges.get(nextEid)!;
+      currentV = e.v1Id === currentV ? e.v2Id : e.v1Id;
+    }
+
+    return sorted.length === edgeIds.length ? sorted : [...edgeIds];
+  }
+
   /**
-   * Adds a connector (tab/blank) to a shared edge between two faces.
-   * @param u Normalized position [0, 1] along the edge.
-   * @param stampPathData SVG path data for the connector shape.
-   * @param isFlipped Toggles the side of the connector.
-   * @param ownerFaceId The face that "owns" the tab (it sticks out of this face).
+   * Places a connector on the shared polyline at the point closest to `anchor`.
+   * Use this when `anchor` comes from `getSharedPerimeter` + `getPointAtU` so the
+   * topological cut matches the boolean engine and Connection-tab preview.
    */
-  addConnectorToBoundary(faceAId: string, faceBId: string, u: number, stampPathData: string, isFlipped: boolean, ownerFaceId: string) {
-    const edgeIds = this.findEdgesBetweenFaces(faceAId, faceBId);
+  addConnectorAtAnchor(
+    faceAId: string,
+    faceBId: string,
+    anchor: paper.Point,
+    stampPathData: string,
+    isFlipped: boolean,
+    ownerFaceId: string
+  ) {
+    let edgeIds = this.findEdgesBetweenFaces(faceAId, faceBId);
     if (edgeIds.length === 0) return;
 
-    // Calculate total length
+    edgeIds = this.sortSharedEdgesAsChain(edgeIds);
+
+    let bestDist = Infinity;
+    let bestEid = '';
+    let bestLocalU = 0;
+
+    for (const eid of edgeIds) {
+      const edge = this.edges.get(eid)!;
+      const v1 = this.vertices.get(edge.v1Id)!.point;
+      const v2 = this.vertices.get(edge.v2Id)!.point;
+      const vec = v2.subtract(v1);
+      const lenSq = vec.dot(vec);
+      if (lenSq < 1e-12) continue;
+
+      const t = Math.max(0, Math.min(1, anchor.subtract(v1).dot(vec) / lenSq));
+      const closest = v1.add(vec.multiply(t));
+      const d = anchor.getDistance(closest);
+      if (d < bestDist) {
+        bestDist = d;
+        bestEid = eid;
+        bestLocalU = t;
+      }
+    }
+
+    if (!bestEid) return;
+
+    const edge = this.edges.get(bestEid)!;
+    if (!edge.connectors) edge.connectors = [];
+    edge.connectors.push({ u: bestLocalU, stampPathData, isFlipped, ownerFaceId });
+  }
+
+  /**
+   * Adds a connector to a shared boundary between two faces.
+   * 'u' is relative to the total length of all shared edges (in chain order).
+   * @param u Normalized position [0, 1] along the combined shared interface.
+   */
+  addConnectorToBoundary(faceAId: string, faceBId: string, u: number, stampPathData: string, isFlipped: boolean, ownerFaceId: string) {
+    let edgeIds = this.findEdgesBetweenFaces(faceAId, faceBId);
+    if (edgeIds.length === 0) return;
+
+    edgeIds = this.sortSharedEdgesAsChain(edgeIds);
+
     let totalLength = 0;
     const edgeLengths = edgeIds.map(eid => {
       const edge = this.edges.get(eid)!;
       const v1 = this.vertices.get(edge.v1Id)!.point;
       const v2 = this.vertices.get(edge.v2Id)!.point;
-      const len = v1.getDistance(v2);
-      totalLength += len;
-      return len;
+      return v1.getDistance(v2);
     });
+    edgeLengths.forEach(len => { totalLength += len; });
 
     if (totalLength === 0) return;
 
     const targetOffset = u * totalLength;
     let currentOffset = 0;
-    
+
     for (let i = 0; i < edgeIds.length; i++) {
       const len = edgeLengths[i];
       if (targetOffset >= currentOffset && targetOffset <= currentOffset + len + 0.001) {

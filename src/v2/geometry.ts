@@ -60,90 +60,63 @@ export function generateHexPoints(width: number, height: number, size: number, j
  * Returns a PathItem representing the shared segments.
  */
 export function getSharedPerimeter(areaA: Area, areaB: Area): paper.PathItem | null {
-  // Quick bounding box check to avoid expensive path operations
-  const boundsA = new paper.Path(areaA.boundary).bounds;
-  const boundsB = new paper.Path(areaB.boundary).bounds;
-  
-  // Slightly expand bounds to catch adjacent edges
-  const expandedA = boundsA.clone().expand(2);
-  if (!expandedA.intersects(boundsB)) {
+  // Quick bounding-box pre-check
+  const pathA = new paper.Path(areaA.boundary);
+  const pathB = new paper.Path(areaB.boundary);
+  const expandedA = pathA.bounds.clone().expand(2);
+  if (!expandedA.intersects(pathB.bounds)) {
+    pathA.remove();
+    pathB.remove();
     return null;
   }
 
-  const pathA = new paper.Path(areaA.boundary);
-  const pathB = new paper.Path(areaB.boundary);
-  
-  // Intersect the two paths. 
-  // For adjacent polygons, paper.js intersect() returns the shared segments.
-  const intersection = pathA.intersect(pathB);
-  
-  // If intersection is empty, try a tiny overlap
-  if (intersection.isEmpty()) {
-    intersection.remove();
-    const cloneA = pathA.clone();
-    cloneA.scale(1.002, pathA.bounds.center);
-    const result = cloneA.intersect(pathB);
-    
-    pathA.remove();
-    pathB.remove();
-    cloneA.remove();
-    
-    if (result.isEmpty()) {
-      result.remove();
-      return null;
+  // Find vertices that appear in both boundaries (within tolerance).
+  // This is robust against the Paper.js "double-edge sliver" problem: instead of
+  // relying on path intersection (which returns an ambiguously-oriented closed sliver),
+  // we just locate the two shared corner points directly.
+  const TOLERANCE = 1.5;
+  const sharedPoints: paper.Point[] = [];
+
+  for (const segA of pathA.segments) {
+    for (const segB of pathB.segments) {
+      if (segA.point.getDistance(segB.point) < TOLERANCE) {
+        sharedPoints.push(segA.point.clone());
+        break;
+      }
     }
-    return result;
   }
-  
+
   pathA.remove();
   pathB.remove();
-  
-  // If it's a CompoundPath, pick the longest segment and check if it's a "double edge"
-  if (intersection instanceof paper.CompoundPath) {
-    let longest: paper.Path | null = null;
-    let maxLen = -1;
-    
-    intersection.children.forEach(child => {
-      if (child instanceof paper.Path && child.length > maxLen) {
-        maxLen = child.length;
-        longest = child;
-      }
-    });
 
-    if (longest) {
-      const result = (longest as paper.Path).clone();
-      intersection.remove();
-      
-      // Check if this child is a double edge
-      if (result.closed || result.firstSegment.point.getDistance(result.lastSegment.point) < 1) {
-        if (Math.abs(result.area) < 1 || result.length > result.bounds.width + result.bounds.height + 2) {
-          const halfLen = result.length / 2;
-          const segment = result.splitAt(halfLen);
-          if (segment) {
-            result.remove();
-            return segment;
-          }
-        }
+  if (sharedPoints.length < 2) return null;
+
+  // If more than 2 vertices matched (e.g. compound whimsy boundaries), use the
+  // pair with the greatest distance — that is the actual shared edge.
+  let p1 = sharedPoints[0];
+  let p2 = sharedPoints[1];
+  let maxDist = p1.getDistance(p2);
+
+  for (let i = 0; i < sharedPoints.length; i++) {
+    for (let j = i + 1; j < sharedPoints.length; j++) {
+      const d = sharedPoints[i].getDistance(sharedPoints[j]);
+      if (d > maxDist) {
+        maxDist = d;
+        p1 = sharedPoints[i];
+        p2 = sharedPoints[j];
       }
-      return result;
     }
   }
 
-  // If it's a closed path or nearly closed, and very thin (a "double edge"), open it and take half
-  if (intersection instanceof paper.Path) {
-    if (intersection.closed || intersection.firstSegment.point.getDistance(intersection.lastSegment.point) < 1) {
-      if (Math.abs(intersection.area) < 1 || intersection.length > intersection.bounds.width + intersection.bounds.height + 2) {
-        const halfLen = intersection.length / 2;
-        const segment = intersection.splitAt(halfLen);
-        if (segment) {
-          intersection.remove();
-          return segment;
-        }
-      }
-    }
-  }
-  
-  return intersection;
+  if (maxDist < 1) return null;
+
+  // Return a clean, open straight path from p1 → p2.
+  // getPointAtU on this path is a simple arc-length fraction of a straight line,
+  // so u=0 → p1, u=0.5 → midpoint, u=1 → p2.
+  const result = new paper.Path();
+  result.add(p1);
+  result.add(p2);
+  return result;
 }
 
 /**
