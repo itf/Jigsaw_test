@@ -1,8 +1,8 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import paper from 'paper';
 
 import { Point, AreaType, Connector, Operation } from './types';
-import { generateGridPoints, generateHexPoints } from './geometry';
+import { generateGridPoints, generateHexGridPoints } from './geometry';
 import { useLongPress } from '../v1/hooks/useLongPress';
 
 import { usePuzzleEngine } from './hooks/usePuzzleEngine';
@@ -38,9 +38,11 @@ export default function V2App() {
   // Subdivision Parameters
   const [gridRows, setGridRows] = useState(4);
   const [gridCols, setGridCols] = useState(4);
+  const [hexRows, setHexRows] = useState(4);
+  const [hexCols, setHexCols] = useState(4);
   const [randomPoints, setRandomPoints] = useState(12);
-  const [hexSize, setHexSize] = useState(60);
-  const [mergeSelection, setMergeSelection] = useState<string | null>(null);
+  const [splitPattern, setSplitPattern] = useState<'GRID' | 'HEX' | 'RANDOM'>('GRID');
+  const [mergePickIds, setMergePickIds] = useState<string[]>([]);
 
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [hoveredType, setHoveredType] = useState<'AREA' | 'CONNECTOR' | 'EDGE' | 'NONE'>('NONE');
@@ -48,7 +50,7 @@ export default function V2App() {
 
   // --- Effects ---
   useEffect(() => {
-    setMergeSelection(null);
+    setMergePickIds([]);
     setSelectedId(null);
     setSelectedType('NONE');
   }, [activeTab]);
@@ -84,43 +86,6 @@ export default function V2App() {
   } = usePuzzleEngine({ width, height, history, activeTab, geometryEngine });
 
   // --- Actions ---
-  const subdivide = useCallback((parentId: string, pattern: string) => {
-    let points: Point[] = [];
-    const parent = topology[parentId];
-    let bounds = { x: 0, y: 0, width, height };
-    
-    if (parent) {
-      paper.setup(new paper.Size(width, height));
-      const path = new paper.Path(parent.boundary);
-      const b = path.bounds;
-      bounds = { x: b.x, y: b.y, width: b.width, height: b.height };
-      path.remove();
-    }
-
-    if (pattern === 'GRID') {
-      points = generateGridPoints(width, height, gridRows, gridCols, 0, bounds);
-    } else if (pattern === 'HEX') {
-      points = generateHexPoints(bounds.width, bounds.height, hexSize);
-      // Offset hex points by bounds origin
-      points = points.map(p => ({ x: p.x + bounds.x, y: p.y + bounds.y }));
-    } else if (pattern === 'RANDOM') {
-      for (let i = 0; i < randomPoints; i++) {
-        points.push({ 
-          x: bounds.x + Math.random() * bounds.width, 
-          y: bounds.y + Math.random() * bounds.height 
-        });
-      }
-    }
-
-    const op: Operation = {
-      id: `subdivide-${Date.now()}`,
-      type: 'SUBDIVIDE',
-      params: { parentId, points, pattern },
-      timestamp: Date.now()
-    };
-    setHistory(prev => [...prev, op]);
-  }, [topology, width, height, gridRows, gridCols, randomPoints, hexSize]);
-
   const mergeAreas = useCallback((areaAId: string, areaBId: string) => {
     const op: Operation = {
       id: `merge-${Date.now()}`,
@@ -130,6 +95,140 @@ export default function V2App() {
     };
     setHistory(prev => [...prev, op]);
   }, []);
+
+  const deletePiece = useCallback((pieceId: string) => {
+    let members = mergedGroups[pieceId];
+    if (!members) {
+      for (const ids of Object.values(mergedGroups)) {
+        if (ids.includes(pieceId)) {
+          members = ids;
+          break;
+        }
+      }
+    }
+    const group = members ?? [pieceId];
+    const rep = group[0];
+    const memberSet = new Set(group);
+    const neighbors = new Set<string>();
+    for (const e of sharedEdges) {
+      if (e.isMerged) continue;
+      const aIn = memberSet.has(e.areaAId);
+      const bIn = memberSet.has(e.areaBId);
+      if (aIn && !bIn) neighbors.add(e.areaBId);
+      if (bIn && !aIn) neighbors.add(e.areaAId);
+    }
+    neighbors.forEach(n => mergeAreas(rep, n));
+    setMergePickIds([]);
+    setSelectedId(null);
+    setSelectedType('NONE');
+  }, [sharedEdges, mergedGroups, mergeAreas]);
+
+  const buildSubdivideOperation = useCallback((parentId: string, pattern: string, opId: string): Operation | null => {
+    const parent = topology[parentId];
+    if (!parent) return null;
+
+    let groupMembers: string[] | undefined = mergedGroups[parentId];
+    if (!groupMembers) {
+      for (const ids of Object.values(mergedGroups)) {
+        if (ids.includes(parentId)) {
+          groupMembers = ids;
+          break;
+        }
+      }
+    }
+    groupMembers = groupMembers ?? [parentId];
+
+    let bounds = { x: 0, y: 0, width, height };
+    let clipBoundary: string | undefined;
+    let absorbedLeafIds: string[] | undefined;
+
+    paper.setup(new paper.Size(width, height));
+
+    if (groupMembers.length > 1) {
+      let mergedPath: paper.PathItem | null = null;
+      groupMembers.forEach(id => {
+        const area = topology[id];
+        if (!area) return;
+        const path = new paper.Path(area.boundary);
+        path.clockwise = true;
+        if (!mergedPath) {
+          mergedPath = path;
+        } else {
+          const next = mergedPath.unite(path);
+          mergedPath.remove();
+          path.remove();
+          mergedPath = next;
+        }
+      });
+      if (mergedPath) {
+        const cleaned = (mergedPath as paper.PathItem).reduce({ insert: false }) as paper.PathItem;
+        cleaned.reorient(true, true);
+        clipBoundary = cleaned.pathData;
+        const ub = cleaned.bounds;
+        bounds = { x: ub.x, y: ub.y, width: ub.width, height: ub.height };
+        cleaned.remove();
+      } else {
+        const path0 = new paper.Path(parent.boundary);
+        const b = path0.bounds;
+        bounds = { x: b.x, y: b.y, width: b.width, height: b.height };
+        path0.remove();
+      }
+      absorbedLeafIds = groupMembers.filter(id => id !== parentId);
+    } else {
+      const path0 = new paper.Path(parent.boundary);
+      const b = path0.bounds;
+      bounds = { x: b.x, y: b.y, width: b.width, height: b.height };
+      path0.remove();
+    }
+
+    let points: Point[] = [];
+    if (pattern === 'GRID') {
+      points = generateGridPoints(width, height, gridRows, gridCols, 0, bounds);
+    } else if (pattern === 'HEX') {
+      points = generateHexGridPoints(bounds, hexRows, hexCols);
+    } else if (pattern === 'RANDOM') {
+      for (let i = 0; i < randomPoints; i++) {
+        points.push({
+          x: bounds.x + Math.random() * bounds.width,
+          y: bounds.y + Math.random() * bounds.height
+        });
+      }
+    }
+
+    return {
+      id: opId,
+      type: 'SUBDIVIDE',
+      params: { parentId, points, pattern, clipBoundary, absorbedLeafIds },
+      timestamp: Date.now()
+    };
+  }, [topology, mergedGroups, width, height, gridRows, gridCols, randomPoints, hexRows, hexCols]);
+
+  const subdivideSelectedPieces = useCallback(() => {
+    const targets = mergePickIds.filter(id => topology[id]?.isPiece);
+    if (targets.length === 0) return;
+    const t0 = Date.now();
+    const ops: Operation[] = [];
+    targets.forEach((pid, i) => {
+      const op = buildSubdivideOperation(pid, splitPattern, `subdivide-${t0}-${i}`);
+      if (op) ops.push(op);
+    });
+    if (ops.length === 0) return;
+    setHistory(prev => [...prev, ...ops]);
+    setMergePickIds([]);
+    setSelectedId(null);
+    setSelectedType('NONE');
+  }, [mergePickIds, topology, splitPattern, buildSubdivideOperation]);
+
+  const mergeSelectedPieces = useCallback(() => {
+    if (mergePickIds.length < 2) return;
+    let acc = mergePickIds[0];
+    for (let i = 1; i < mergePickIds.length; i++) {
+      mergeAreas(acc, mergePickIds[i]);
+    }
+    setMergePickIds([]);
+    setSelectedId(null);
+    setSelectedType('NONE');
+  }, [mergePickIds, mergeAreas]);
 
   const addConnector = useCallback((areaAId: string, areaBId: string, u: number) => {
     const op: Operation = {
@@ -165,17 +264,26 @@ export default function V2App() {
   // --- Interaction Handlers ---
   const handleAreaClick = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (activeTab === 'MODIFICATION') {
-      if (!mergeSelection) {
-        setMergeSelection(id);
-      } else if (mergeSelection !== id) {
-        mergeAreas(mergeSelection, id);
-        setMergeSelection(null);
-      }
-    } else {
-      setSelectedId(id);
-      setSelectedType('AREA');
+    if (activeTab === 'TOPOLOGY') {
+      setMergePickIds(prev => {
+        const next = new Set(prev);
+        const wasOn = next.has(id);
+        if (wasOn) {
+          next.delete(id);
+          const arr = Array.from(next);
+          setSelectedId(cur => (cur === id ? (arr[0] ?? null) : cur));
+          if (arr.length === 0) setSelectedType('NONE');
+          return arr;
+        }
+        next.add(id);
+        setSelectedId(id);
+        setSelectedType('AREA');
+        return Array.from(next);
+      });
+      return;
     }
+    setSelectedId(id);
+    setSelectedType('AREA');
   };
 
   const longPressProps = useLongPress(
@@ -188,9 +296,17 @@ export default function V2App() {
 
   const scale = Math.min(containerSize.w / width, containerSize.h / height) * 0.9;
 
-  // Subdivide target: the selected area if it's a leaf, otherwise disabled
-  const subdivideTargetId = selectedType === 'AREA' && selectedId ? selectedId : null;
-  const canSubdivide = subdivideTargetId != null && (topology[subdivideTargetId]?.isPiece ?? false);
+  const canSubdivideTopology =
+    mergePickIds.length > 0 && mergePickIds.every(id => topology[id]?.isPiece);
+
+  const splittingHint = useMemo(() => {
+    if (mergePickIds.length === 0) return null;
+    if (mergePickIds.length === 1) {
+      const t = mergePickIds[0];
+      return t === 'root' ? 'root' : t.split('-').slice(-2).join('-');
+    }
+    return `${mergePickIds.length} pieces`;
+  }, [mergePickIds]);
 
   return (
     <div className="flex flex-col h-screen bg-slate-50 overflow-hidden font-sans selection:bg-indigo-100">
@@ -215,28 +331,33 @@ export default function V2App() {
 
       <V2ActionBar
         activeTab={activeTab}
-        isMobile={isMobile}
-        subdivideTargetId={subdivideTargetId ?? 'root'}
-        canSubdivide={canSubdivide}
+        splittingHint={splittingHint}
+        canSubdivide={canSubdivideTopology}
+        splitPattern={splitPattern}
+        setSplitPattern={setSplitPattern}
         gridRows={gridRows}
         setGridRows={setGridRows}
         gridCols={gridCols}
         setGridCols={setGridCols}
-        hexSize={hexSize}
-        setHexSize={setHexSize}
+        hexRows={hexRows}
+        setHexRows={setHexRows}
+        hexCols={hexCols}
+        setHexCols={setHexCols}
         randomPoints={randomPoints}
         setRandomPoints={setRandomPoints}
-        subdivide={subdivide}
+        subdivideSelectedPieces={subdivideSelectedPieces}
         selectedId={selectedId}
         selectedType={selectedType}
         selectionData={selectedType === 'AREA' ? topology[selectedId!] : resolvedConnectors.find(c => c.id === selectedId)}
-        mergeSelection={mergeSelection}
-        setMergeSelection={setMergeSelection}
+        mergePickIds={mergePickIds}
+        mergeSelectedPieces={mergeSelectedPieces}
+        deletePiece={deletePiece}
         onUpdateConnector={updateConnector}
         onDeleteOperation={deleteOperation}
         onClearSelection={() => {
           setSelectedId(null);
           setSelectedType('NONE');
+          setMergePickIds([]);
         }}
       />
 
@@ -249,7 +370,7 @@ export default function V2App() {
           activeTab={activeTab}
           displayPieces={finalPieces}
           selectedId={selectedId}
-          mergeSelection={mergeSelection}
+          mergePickIds={mergePickIds}
           sharedEdges={sharedEdges}
           resolvedConnectors={resolvedConnectors}
           topology={topology}
@@ -260,6 +381,13 @@ export default function V2App() {
           setSelectedId={setSelectedId}
           setSelectedType={setSelectedType}
           longPressProps={longPressProps}
+          onBackgroundClick={() => {
+            if (activeTab === 'TOPOLOGY') {
+              setMergePickIds([]);
+              setSelectedId(null);
+              setSelectedType('NONE');
+            }
+          }}
         />
 
         <V2TestResults testResults={testResults} onClose={() => setTestResults([])} />

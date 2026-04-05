@@ -13,7 +13,7 @@ interface V2CanvasProps {
   activeTab: Tab;
   displayPieces: { id: string; pathData: string; color: string }[];
   selectedId: string | null;
-  mergeSelection: string | null;
+  mergePickIds: string[];
   sharedEdges: { id: string; areaAId: string; areaBId: string; pathData: string; isMerged: boolean }[];
   resolvedConnectors: Connector[];
   topology: Record<string, Area>;
@@ -24,6 +24,7 @@ interface V2CanvasProps {
   setSelectedId: (id: string | null) => void;
   setSelectedType: (type: 'AREA' | 'CONNECTOR' | 'NONE') => void;
   longPressProps: any;
+  onBackgroundClick?: () => void;
 }
 
 export const V2Canvas: React.FC<V2CanvasProps> = ({
@@ -34,7 +35,7 @@ export const V2Canvas: React.FC<V2CanvasProps> = ({
   activeTab,
   displayPieces,
   selectedId,
-  mergeSelection,
+  mergePickIds,
   sharedEdges,
   resolvedConnectors,
   topology,
@@ -45,6 +46,7 @@ export const V2Canvas: React.FC<V2CanvasProps> = ({
   setSelectedId,
   setSelectedType,
   longPressProps,
+  onBackgroundClick,
 }) => {
   const outerRef = useRef<HTMLDivElement>(null);
 
@@ -186,6 +188,7 @@ export const V2Canvas: React.FC<V2CanvasProps> = ({
     // Pieces stop propagation, so if we're here it's a genuine background click
     setSelectedId(null);
     setSelectedType('NONE');
+    onBackgroundClick?.();
   };
 
   const pctLabel = Math.round((zoom / fitScale) * 100);
@@ -235,29 +238,89 @@ export const V2Canvas: React.FC<V2CanvasProps> = ({
           viewBox={`0 0 ${width} ${height}`}
           className="w-full h-full"
         >
+          <defs>
+            <filter id="piece-selection-glow" x="-40%" y="-40%" width="180%" height="180%">
+              <feGaussianBlur in="SourceAlpha" stdDeviation="3" result="blur" />
+              <feFlood floodColor="#4338ca" floodOpacity="0.55" result="glowColor" />
+              <feComposite in="glowColor" in2="blur" operator="in" result="softGlow" />
+              <feMerge>
+                <feMergeNode in="softGlow" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
           {/* Pieces */}
           <g>
-            {displayPieces.map(piece => (
-              <path
-                key={piece.id}
-                d={piece.pathData}
-                fill={piece.color}
-                fillRule="evenodd"
-                stroke={
-                  activeTab === 'PRODUCTION' ? 'none'
-                  : activeTab === 'MODIFICATION' ? 'none'
-                  : selectedId === piece.id ? '#6366f1'
-                  : mergeSelection === piece.id ? '#f59e0b'
-                  : '#000'
+            {displayPieces.map(piece => {
+              if (activeTab === 'PRODUCTION' || activeTab === 'MODIFICATION') {
+                return (
+                  <path
+                    key={piece.id}
+                    d={piece.pathData}
+                    fill={piece.color}
+                    fillRule="evenodd"
+                    stroke="none"
+                    className="transition-all duration-300 hover:opacity-80 cursor-pointer"
+                    onMouseEnter={() => setHoveredId(piece.id)}
+                    onMouseLeave={() => setHoveredId(null)}
+                    onClick={(e) => { e.stopPropagation(); handleAreaClick(piece.id, e); }}
+                  />
+                );
+              }
+
+              const isTopo = activeTab === 'TOPOLOGY';
+              const picked = isTopo && mergePickIds.includes(piece.id);
+              const focused = isTopo && selectedId === piece.id;
+
+              let stroke = '#000';
+              let strokeWidth = 1;
+              let filter: string | undefined;
+              let highlight: React.ReactNode = null;
+
+              if (isTopo) {
+                if (picked) {
+                  stroke = '#1e1b4b';
+                  strokeWidth = focused ? 6 : 5;
+                  filter = 'url(#piece-selection-glow)';
+                  highlight = (
+                    <path
+                      d={piece.pathData}
+                      fill="rgba(79, 70, 229, 0.42)"
+                      fillRule="evenodd"
+                      className="pointer-events-none"
+                      style={{ mixBlendMode: 'multiply' }}
+                      aria-hidden
+                    />
+                  );
+                } else if (focused) {
+                  stroke = '#4f46e5';
+                  strokeWidth = 4;
                 }
-                strokeWidth={selectedId === piece.id || mergeSelection === piece.id ? '3' : '1'}
-                strokeDasharray={mergeSelection === piece.id ? '4 2' : 'none'}
-                className="transition-all duration-300 hover:opacity-80 cursor-pointer"
-                onMouseEnter={() => setHoveredId(piece.id)}
-                onMouseLeave={() => setHoveredId(null)}
-                onClick={(e) => { e.stopPropagation(); handleAreaClick(piece.id, e); }}
-              />
-            ))}
+              } else {
+                stroke = selectedId === piece.id ? '#6366f1' : '#000';
+                strokeWidth = selectedId === piece.id ? 3 : 1;
+              }
+
+              return (
+                <g key={piece.id}>
+                  <path
+                    d={piece.pathData}
+                    fill={piece.color}
+                    fillRule="evenodd"
+                    stroke={stroke}
+                    strokeWidth={strokeWidth}
+                    strokeLinejoin="round"
+                    strokeLinecap="round"
+                    filter={filter}
+                    className="transition-all duration-200 hover:opacity-90 cursor-pointer"
+                    onMouseEnter={() => setHoveredId(piece.id)}
+                    onMouseLeave={() => setHoveredId(null)}
+                    onClick={(e) => { e.stopPropagation(); handleAreaClick(piece.id, e); }}
+                  />
+                  {highlight}
+                </g>
+              );
+            })}
           </g>
 
           {/* Shared Edges */}
