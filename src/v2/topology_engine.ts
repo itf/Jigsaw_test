@@ -570,59 +570,95 @@ export class TopologicalEngine {
 
   /**
    * Gets the path for an edge, optionally reversed, and with connectors applied.
+   *
+   * Each connector stamp is an open curve whose two endpoints attach to the shared
+   * edge.  The correct splice is:
+   *   [edge from start → stamp_endpoint_0] + [stamp arc] + [stamp_endpoint_1 → edge end]
+   *
+   * The attachment offsets are found by projecting the stamp's first/last points back
+   * onto the original edge path via getNearestLocation.  The edge is then sampled as
+   * a polyline between those attachment points, avoiding the "shortcut gap" that
+   * occurred when the old code jumped from edge-start directly to the stamp.
    */
   private getEdgePath(edgeId: string, reversed: boolean): paper.Path {
     const edge = this.edges.get(edgeId)!;
-    
+
     if (!edge.connectors || edge.connectors.length === 0) {
       const path = new paper.Path(edge.pathData);
       if (reversed) path.reverse();
       return path;
     }
 
-    // Sort connectors by position along the edge
     const sorted = [...edge.connectors].sort((a, b) => a.u - b.u);
-    
-    // We'll build a new path by splicing connectors into the original edge
     const edgePath = new paper.Path(edge.pathData);
     const totalLen = edgePath.length;
-    
-    const newPath = new paper.Path();
-    newPath.add(edgePath.firstSegment.point.clone());
-    
-    sorted.forEach(c => {
-      const offset = c.u * totalLen;
-      const pos = edgePath.getPointAt(offset);
+
+    // For each connector: position the stamp and record the edge offsets of its two
+    // attachment endpoints.
+    type Entry = { off0: number; off1: number; stamp: paper.Path };
+    const entries: Entry[] = sorted.map(c => {
+      const offset = Math.max(0, Math.min(totalLen, c.u * totalLen));
+      const pos     = edgePath.getPointAt(offset);
       const tangent = edgePath.getTangentAt(offset);
-      const angle = tangent.angle;
-      
+      const angle   = tangent.angle;
+
       const stamp = new paper.Path(c.stampPathData);
-      
-      // Convention: raw stamp points RIGHT (0 degrees)
-      // side = 1 means point into A (-90 relative to tangent)
-      // side = -1 means point into B (+90 relative to tangent)
-      let side = (c.ownerFaceId === edge.faceAId) ? -1 : 1;
-      
-      const rotation = angle - 90 * side;
-      stamp.rotate(rotation, new paper.Point(0, 0));
+      const side  = (c.ownerFaceId === edge.faceAId) ? -1 : 1;
+      stamp.rotate(angle - 90 * side, new paper.Point(0, 0));
       stamp.translate(pos);
-      
       stamp.closed = false;
-      
-      const d1 = stamp.firstSegment.point.getDistance(newPath.lastSegment.point);
-      const d2 = stamp.lastSegment.point.getDistance(newPath.lastSegment.point);
-      
-      if (d2 < d1) {
+
+      // Project stamp endpoints back onto the edge to get attachment offsets.
+      const loc0 = edgePath.getNearestLocation(stamp.firstSegment.point);
+      const loc1 = edgePath.getNearestLocation(stamp.lastSegment.point);
+      let off0 = loc0.offset;
+      let off1 = loc1.offset;
+
+      // Ensure stamp runs in the same direction as the edge (off0 < off1).
+      if (off0 > off1) {
         stamp.reverse();
+        [off0, off1] = [off1, off0];
       }
-      
-      newPath.addSegments(stamp.segments.map(s => s.clone()));
-      stamp.remove();
+
+      return { off0, off1, stamp };
     });
-    
-    newPath.add(edgePath.lastSegment.point.clone());
+
+    // Sample the edge as a polyline between connector attachment points, inserting
+    // each stamp curve at its splice region.
+    const SAMPLE_STEP = 4; // pixels between sample points on the straight edge portions
+
+    function sampleEdge(fromOff: number, toOff: number): paper.Point[] {
+      const pts: paper.Point[] = [];
+      if (toOff <= fromOff) return pts;
+      const n = Math.max(1, Math.round((toOff - fromOff) / SAMPLE_STEP));
+      for (let i = 0; i <= n; i++) {
+        const t = fromOff + (toOff - fromOff) * (i / n);
+        const pt = edgePath.getPointAt(Math.max(0, Math.min(totalLen, t)));
+        if (pt) pts.push(pt);
+      }
+      return pts;
+    }
+
+    const newPath = new paper.Path();
+    let cursor = 0;
+
+    for (const { off0, off1, stamp } of entries) {
+      // Edge section before this stamp.
+      const edgeSeg = sampleEdge(cursor, off0);
+      for (const pt of edgeSeg) newPath.add(pt);
+
+      // Stamp arc.
+      newPath.addSegments(stamp.segments.map((s: paper.Segment) => s.clone()));
+      stamp.remove();
+
+      cursor = off1;
+    }
+
+    // Remaining edge after the last stamp.
+    const tail = sampleEdge(cursor, totalLen);
+    for (const pt of tail) newPath.add(pt);
+
     edgePath.remove();
-    
     if (reversed) newPath.reverse();
     return newPath;
   }

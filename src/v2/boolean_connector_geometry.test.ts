@@ -6,7 +6,14 @@ import {
   buildBooleanBasePieces,
   intersectionArea,
 } from './boolean_connector_geometry';
-import { getSharedPerimeter, getPointAtU, createConnectorStamp, connectorOwnerNeighborLeafIds } from './geometry';
+import {
+  getSharedPerimeter,
+  getPointAtU,
+  createConnectorStamp,
+  connectorOwnerNeighborLeafIds,
+  orientConnectorNormalTowardNeighbor,
+} from './geometry';
+import { pathItemFromBoundaryData } from './paperProject';
 
 const W = 400;
 const H = 400;
@@ -132,22 +139,47 @@ function stampBoundsHitPiece(stampData: string, piecePathData: string): boolean 
   return hit;
 }
 
+/**
+ * Mirrors the engine's stamp-position logic exactly: u is a fraction of areaA's full
+ * boundary perimeter (as stored when the user clicks in V2Canvas), not the shared chord.
+ */
 function stampPathData(
   topology: Record<string, Area>,
   c: Pick<Connector, 'areaAId' | 'areaBId' | 'u' | 'isFlipped' | 'type' | 'size'>
 ): string | null {
   const areaA = topology[c.areaAId];
   const areaB = topology[c.areaBId];
-  const shared = getSharedPerimeter(areaA, areaB);
-  if (!shared) return null;
-  const pos = getPointAtU(shared, c.u);
-  shared.remove();
+  if (!areaA || !areaB) return null;
+  const pathA = pathItemFromBoundaryData(areaA.boundary);
+  const pos = getPointAtU(pathA, c.u);
+  pathA.remove();
   if (!pos) return null;
-  const normal = c.isFlipped ? pos.normal.multiply(-1) : pos.normal;
+  let normal = c.isFlipped ? pos.normal.multiply(-1) : pos.normal;
+  normal = orientConnectorNormalTowardNeighbor(pos.point, normal, areaB.boundary);
   const stamp = createConnectorStamp(pos.point, normal, c.type, c.size);
   const d = stamp.pathData;
   stamp.remove();
   return d;
+}
+
+/**
+ * Converts a fraction along the areaA–areaB shared perimeter into the corresponding
+ * u-value along areaA's full boundary.  Use this to build connectors that land at a
+ * known, geometrically meaningful position (e.g. start/middle/end of the shared edge)
+ * while respecting the engine's full-boundary parameterisation of `u`.
+ */
+function uOnSharedEdge(areaA: Area, areaB: Area, fractionAlongShared: number): number {
+  const shared = getSharedPerimeter(areaA, areaB);
+  if (!shared) return fractionAlongShared;
+  const pos = getPointAtU(shared, fractionAlongShared);
+  shared.remove();
+  if (!pos) return fractionAlongShared;
+  const pathA = pathItemFromBoundaryData(areaA.boundary);
+  const loc = pathA.getNearestLocation(pos.point);
+  const pathLen = (pathA as paper.Path).length;
+  const result = loc.offset / pathLen;
+  pathA.remove();
+  return result;
 }
 
 describe('applyBooleanConnectorStampsToPieces — full matrix u∈{0,1} × flip × clipOverlap', () => {
@@ -240,16 +272,20 @@ describe('applyBooleanConnectorStampsToPieces — full matrix u∈{0,1} × flip 
 });
 
 describe('applyBooleanConnectorStampsToPieces — third piece clip when stamp overlaps c', () => {
-  it('with clipOverlap subtracts more stamp from c than without (u=0.5, not flipped)', () => {
+  it('with clipOverlap subtracts more stamp from c than without (midpoint of shared edge, not flipped)', () => {
     paper.setup(new paper.Size(W, H));
     const topology = threeStripTopology();
     const base = basePiecesFromTopology(topology);
+
+    // u = position on A's full boundary that corresponds to the midpoint of the A–B shared edge.
+    // With A = 0,0–80,400 and B = 80,0–160,400 the shared edge midpoint is (80, 200).
+    const u = uOnSharedEdge(topology.a, topology.b, 0.5);
 
     const connector: Connector = {
       id: 'x',
       areaAId: 'a',
       areaBId: 'b',
-      u: 0.5,
+      u,
       isFlipped: false,
       type: 'TAB',
       size: 90,
@@ -279,21 +315,24 @@ describe('applyBooleanConnectorStampsToPieces — third piece clip when stamp ov
 /**
  * Layout: p1 p2 p3 / p4 p5 p6. Connector on the **horizontal** seam p2–p5: the tab extends along the seam
  * (sideways in x) and into p2/p5 along the normal — so it can overlap **p1, p3, p4, p6** depending on u.
- * Shared-perimeter chord order means u=0 / u=1 are the two ends of the seam (not necessarily “left” / “right”).
+ * u values are derived from uOnSharedEdge so they correspond to actual positions on the p2–p5 shared edge.
  */
 describe('applyBooleanConnectorStampsToPieces — 2×3 grid, connector p2–p5 (sideways third-piece clip)', () => {
   const sideIds = ['p1', 'p3', 'p4', 'p6'] as const;
   /** Large enough that head width along the seam exceeds middle column width (see GRID_CW). */
   const size = 110;
 
-  for (const u of [0, 0.5, 1] as const) {
-    it(`u=${u}: clipOverlap only reduces side pieces whose bounds intersect the stamp (same rule as engine)`, () => {
+  for (const sharedFraction of [0, 0.5, 1] as const) {
+    it(`shared-fraction=${sharedFraction}: clipOverlap only reduces side pieces whose bounds intersect the stamp`, () => {
       paper.setup(new paper.Size(GRID_PAPER_W, GRID_PAPER_H));
       const topology = grid2x3Topology();
       const base = basePiecesFromGrid(topology);
       const baseArea = Object.fromEntries(
         GRID_PIECE_IDS.map(id => [id, absArea(topology[id].boundary)])
       ) as Record<(typeof GRID_PIECE_IDS)[number], number>;
+
+      // Convert shared-edge fraction to full-boundary u (as stored when user clicks in the UI).
+      const u = uOnSharedEdge(topology.p2, topology.p5, sharedFraction);
 
       const connector: Connector = {
         id: 'p2p5',
@@ -350,7 +389,7 @@ describe('applyBooleanConnectorStampsToPieces — 2×3 grid, connector p2–p5 (
     });
   }
 
-  it('across u=0 and u=1, each of p1,p3,p4,p6 has material stamp overlap for some u (regression: endpoint asymmetry)', () => {
+  it('at each endpoint of the shared edge, all four side pieces have material stamp overlap across the two endpoints (regression: endpoint asymmetry)', () => {
     paper.setup(new paper.Size(GRID_PAPER_W, GRID_PAPER_H));
     const topology = grid2x3Topology();
     const connectorBase = {
@@ -365,7 +404,9 @@ describe('applyBooleanConnectorStampsToPieces — 2×3 grid, connector p2–p5 (
     };
 
     const hadMaterial = { p1: false, p3: false, p4: false, p6: false };
-    for (const u of [0, 1] as const) {
+    // Check both endpoints of the p2-p5 shared edge (fraction=0 and fraction=1).
+    for (const sharedFraction of [0, 1] as const) {
+      const u = uOnSharedEdge(topology.p2, topology.p5, sharedFraction);
       const stampData = stampPathData(topology, { ...connectorBase, u })!;
       for (const sid of sideIds) {
         if (intersectionArea(stampData, topology[sid].boundary) > 8) {
