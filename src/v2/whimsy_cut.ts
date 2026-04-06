@@ -461,8 +461,11 @@ export function applyAddWhimsyOp(
       areas,
       cluster.map(l => l.id)
     );
-    // If the cluster was a whimsy, preserve its type in the remainder
-    const originalType = cluster.length === 1 ? cluster[0].type : undefined;
+    // If the cluster was a whimsy piece, preserve its type in the remainder.
+    // ROOT and SUBDIVISION types always produce SUBDIVISION remainders.
+    const originalType = cluster.length === 1 && cluster[0].type === AreaType.WHIMSY
+      ? AreaType.WHIMSY
+      : undefined;
 
     rPaths.forEach(rp => {
       remainderSpecs.push({ parentId: parentForRemainder, path: rp, clusterIndex: ci, originalType });

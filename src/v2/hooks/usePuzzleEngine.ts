@@ -13,8 +13,6 @@ import {
   orientConnectorNormalTowardNeighbor,
   clampConnectorU,
   findNeighborAt,
-  pathsTouch,
-  sortCompoundPathChildren,
 } from '../geometry';
 import {
   computeBooleanGeometry,
@@ -161,15 +159,10 @@ export function usePuzzleEngine({
           const a = areas[la];
           const b = areas[lb];
           if (!a || !b) return;
-          
-          const pathA = pathItemFromBoundaryData(a.boundary);
-          const pathB = pathItemFromBoundaryData(b.boundary);
-          const touching = pathsTouch(pathA, pathB, 1.0);
-          pathA.remove();
-          pathB.remove();
-          
-          if (touching) {
+          const shared = getSharedPerimeter(a, b);
+          if (shared) {
             union(la, lb);
+            shared.remove();
           }
         });
       });
