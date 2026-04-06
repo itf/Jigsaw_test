@@ -2,7 +2,6 @@ import paper from 'paper';
 import { Area, Connector } from './types';
 import { pathItemFromBoundaryData, resetPaperProject } from './paperProject';
 import {
-  getSharedPerimeter,
   getPointAtU,
   createConnectorStamp,
   connectorOwnerNeighborLeafIds,

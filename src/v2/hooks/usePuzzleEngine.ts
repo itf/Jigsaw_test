@@ -67,6 +67,15 @@ function connectorSignature(c: Connector): string {
   ].join('|');
 }
 
+/** SUBDIVIDE / MERGE / ADD_WHIMSY only — replaying these rebuilds `topology`; ADD_CONNECTOR etc. must not invalidate this key. */
+function topologyAffectingHistoryKey(history: Operation[]): string {
+  return JSON.stringify(
+    history.filter(
+      op => op.type === 'MERGE' || op.type === 'SUBDIVIDE' || op.type === 'ADD_WHIMSY'
+    )
+  );
+}
+
 function clearEdgeConnectors(engine: TopologicalEngine) {
   engine.edges.forEach(e => {
     e.connectors = undefined;
@@ -112,7 +121,10 @@ export function usePuzzleEngine({
     [width, height, initialShape]
   );
 
+  const topologyKey = useMemo(() => topologyAffectingHistoryKey(history), [history]);
+
   // 2–3. Topology + merged groups: history order matters (MERGE uses geometry at that moment).
+  // Depends on topologyKey, not full history, so ADD_CONNECTOR / RESOLVE / etc. do not replay Voronoi + O(n²) merges.
   const { topology, mergedGroups, whimsyWarnings } = useMemo((): {
     topology: Record<string, Area>;
     mergedGroups: Record<string, string[]>;
@@ -168,7 +180,11 @@ export function usePuzzleEngine({
       });
     };
 
-    history.forEach(op => {
+    const topologyOps = history.filter(
+      op => op.type === 'MERGE' || op.type === 'SUBDIVIDE' || op.type === 'ADD_WHIMSY'
+    );
+
+    topologyOps.forEach(op => {
       if (op.type === 'MERGE') {
         applyMerge(op);
         return;
@@ -248,7 +264,8 @@ export function usePuzzleEngine({
     });
 
     return { topology: areas, mergedGroups: groups, whimsyWarnings };
-  }, [baseAreas, history, width, height]);
+    // topologyKey captures topology-affecting ops; `history` is read from the render when the key changes (omit from deps).
+  }, [baseAreas, topologyKey, width, height]);
 
     // 4. Shared Edges: For visualization and connector placement
     const sharedEdges = useMemo(() => {
@@ -529,9 +546,9 @@ export function usePuzzleEngine({
           const chordPath = shared as paper.Path;
           chordEnd0 = chordPath.firstSegment.point.clone();
           chordEnd1 = chordPath.lastSegment.point.clone();
-          
-          const nearestOnShared = shared.getNearestPoint(pos.point);
-          sharedU = shared.getOffsetOf(nearestOnShared) / shared.length;
+
+          const nearestOnShared = chordPath.getNearestPoint(pos.point);
+          sharedU = chordPath.getOffsetOf(nearestOnShared) / chordPath.length;
           shared.remove();
         }
 

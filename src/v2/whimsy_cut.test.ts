@@ -48,6 +48,51 @@ describe('applyAddWhimsyOp', () => {
     remainderPath.remove();
   });
 
+  it('second whimsy fully inside first: remainder ring updates hole (not stale subtract)', () => {
+    const areas = cloneAreaMap(buildAreasFromInitialShape(400, 300, { variant: 'rect' }));
+    const cx = 200;
+    const cy = 150;
+    const op1: Operation = {
+      id: 'w-stack-a',
+      type: 'ADD_WHIMSY',
+      params: {
+        templateId: 'circle',
+        center: { x: cx, y: cy },
+        scale: 72,
+        rotationDeg: 0,
+      },
+      timestamp: 1,
+    };
+    applyAddWhimsyOp(areas, op1, 400, 300);
+    const op2: Operation = {
+      id: 'w-stack-b',
+      type: 'ADD_WHIMSY',
+      params: {
+        templateId: 'circle',
+        center: { x: cx, y: cy },
+        scale: 28,
+        rotationDeg: 0,
+      },
+      timestamp: 2,
+    };
+    const { warnings } = applyAddWhimsyOp(areas, op2, 400, 300);
+    expect(warnings.length).toBe(0);
+
+    const pieces = Object.values(areas).filter(a => a.isPiece);
+    const whimsies = pieces.filter(a => a.type === AreaType.WHIMSY);
+    const remainders = pieces.filter(a => a.type === AreaType.SUBDIVISION);
+    expect(whimsies.length).toBe(2);
+    expect(remainders.length).toBeGreaterThanOrEqual(1);
+
+    resetPaperProject(400, 300);
+    const centerPt = new paper.Point(cx, cy);
+    for (const r of remainders) {
+      const rp = pathItemFromBoundaryData(r.boundary);
+      expect(rp.contains(centerPt)).toBe(false);
+      rp.remove();
+    }
+  });
+
   it('cuts a circle whimsy from overlapping pieces (canvas placement)', () => {
     const areas = cloneAreaMap(buildAreasFromInitialShape(400, 300, { variant: 'rect' }));
     const op: Operation = {

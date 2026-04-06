@@ -451,21 +451,23 @@ export function getSharedPerimeter(areaA: Area, areaB: Area): paper.PathItem | n
     }
   }
 
-  topA.remove();
-  topB.remove();
+  if (sharedPaths.length === 0) {
+    topA.remove();
+    topB.remove();
+    return null;
+  }
 
-  if (sharedPaths.length === 0) return null;
-
-  // Sort sharedPaths based on their position on the original areaA boundary
-  const originalTopA = pathItemFromBoundaryData(areaA.boundary);
+  // Sort along area A's boundary (reuse topA — avoid a second path parse; topA removed below).
   sharedPaths.sort((a, b) => {
     const midA = a.getPointAt(a.length / 2);
     const midB = b.getPointAt(b.length / 2);
-    const locA = originalTopA.getNearestLocation(midA);
-    const locB = originalTopA.getNearestLocation(midB);
-    return getTotalOffset(originalTopA, locA) - getTotalOffset(originalTopA, locB);
+    const locA = topA.getNearestLocation(midA);
+    const locB = topA.getNearestLocation(midB);
+    return getTotalOffset(topA, locA) - getTotalOffset(topA, locB);
   });
-  originalTopA.remove();
+
+  topA.remove();
+  topB.remove();
 
   // Join contiguous segments
   let joined = true;

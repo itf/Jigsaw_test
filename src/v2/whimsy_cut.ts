@@ -203,29 +203,78 @@ function unionClusterBoundaries(leaves: Area[]): paper.PathItem {
   return out;
 }
 
+/**
+ * True if the leaf's filled region overlaps the stencil with positive area.
+ * Paper.js boolean `intersect` often returns ~0 area for arc / high-segment circles even when the
+ * regions overlap; we fall back to sampling the overlap bbox and to boundary crossings.
+ */
 function leafOverlapsStencil(leaf: Area, stencil: paper.Path): boolean {
   const lp = pathItemFromBoundaryData(leaf.boundary);
-  const sb = stencil.bounds.clone().expand(1); // Add 1px buffer for robustness
+  const sb = stencil.bounds.clone().expand(1);
   if (!lp.bounds.intersects(sb)) {
     lp.remove();
     return false;
   }
   const st = stencil.clone({ insert: true }) as paper.Path;
   const hit = lp.intersect(st);
-  let a = 0;
+  let area = 0;
   if (hit) {
     if (hit instanceof paper.CompoundPath) {
       hit.children.forEach(ch => {
-        a += Math.abs((ch as paper.Path).area);
+        area += Math.abs((ch as paper.Path).area);
       });
     } else if (hit instanceof paper.Path) {
-      a = Math.abs(hit.area);
+      area = Math.abs(hit.area);
+    }
+    hit.remove();
+  }
+  if (area > EPS_AREA) {
+    lp.remove();
+    st.remove();
+    return true;
+  }
+
+  const ib = lp.bounds.intersect(st.bounds);
+  if (ib != null && ib.width > 0 && ib.height > 0) {
+    const n = 8;
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        const x = ib.left + ((i + 0.5) / n) * ib.width;
+        const y = ib.top + ((j + 0.5) / n) * ib.height;
+        const pt = new paper.Point(x, y);
+        if (st.contains(pt) && lp.contains(pt)) {
+          lp.remove();
+          st.remove();
+          return true;
+        }
+      }
     }
   }
-  hit?.remove();
+
+  // Two overlapping simple closed curves usually meet at ≥2 boundary crossings; catches boolean gaps.
+  if (lp.getIntersections(st).length >= 2) {
+    lp.remove();
+    st.remove();
+    return true;
+  }
+
   lp.remove();
   st.remove();
-  return a > EPS_AREA;
+  return false;
+}
+
+/**
+ * Every leaf whose merge-group representative overlaps the stencil must be re-cut together
+ * (union material, then subtract stencil). Other leaves are left unchanged.
+ */
+function expandParticipatingByMergeGroup(
+  leaves: Area[],
+  overlapSeeds: Area[],
+  find: (id: string) => string
+): Area[] {
+  if (overlapSeeds.length === 0) return [];
+  const repSet = new Set(overlapSeeds.map(l => find(l.id)));
+  return leaves.filter(l => repSet.has(find(l.id))).sort((a, b) => a.id.localeCompare(b.id));
 }
 
 export type ApplyAddWhimsyResult = {
@@ -381,10 +430,9 @@ function applyAddWhimsyOpLegacy(
 }
 
 /**
- * Applies ADD_WHIMSY: cuts all leaf pieces that overlap the stencil (corners / multi-piece).
- * Legacy: if `parentId` is set, uses single-material cut only.
- * `find` groups leaves that are merged in the DSU (same representative) into one material union before cutting,
- * so one whimsy does not recreate a separate remainder per leaf of a merged group.
+ * Applies ADD_WHIMSY: new whimsy = stencil ∩ (union of participating material); each merge-group cluster
+ * gets remainder = material − stencil. Participating leaves are overlap seeds plus all leaves in the same
+ * merge group (DSU). Legacy: if `parentId` is set, uses single-material cut only.
  */
 export function applyAddWhimsyOp(
   areas: Record<string, Area>,
@@ -415,7 +463,9 @@ export function applyAddWhimsyOp(
   stencil.reorient(true, true);
 
   const leaves = (Object.values(areas) as Area[]).filter(a => a.isPiece);
-        const participating = leaves.filter(l => leafOverlapsStencil(l, stencil)).sort((a, b) => a.id.localeCompare(b.id));
+  const participatingSeeds = leaves.filter(l => leafOverlapsStencil(l, stencil));
+  const originalStencilOverlap = new Set(participatingSeeds.map(l => l.id));
+  const participating = expandParticipatingByMergeGroup(leaves, participatingSeeds, find);
 
   if (participating.length === 0) {
     stencil.remove();
@@ -431,52 +481,9 @@ export function applyAddWhimsyOp(
   totalMaterial.remove();
   stForWhimsy.remove();
 
-  const clusterMap = new Map<string, Area[]>();
-  for (const leaf of participating) {
-    const r = find(leaf.id);
-    if (!clusterMap.has(r)) clusterMap.set(r, []);
-    clusterMap.get(r)!.push(leaf);
-  }
-  const clusters = Array.from(clusterMap.values())
-    .map(c => c.sort((a, b) => a.id.localeCompare(b.id)))
-    .sort((a, b) => a[0].id.localeCompare(b[0].id));
-
-  const clusterAnchorReps = clusters.map(c => find(c[0].id));
-
-  const remainderSpecs: { parentId: string; path: paper.PathItem; clusterIndex: number; originalType?: AreaType }[] = [];
-
-  for (let ci = 0; ci < clusters.length; ci++) {
-    const cluster = clusters[ci];
-    const mat =
-      cluster.length === 1
-        ? pathItemFromBoundaryData(cluster[0].boundary)
-        : unionClusterBoundaries(cluster);
-    const st2 = stencil.clone({ insert: true }) as paper.Path;
-    const rRaw = mat.subtract(st2);
-    mat.remove();
-    st2.remove();
-
-    const rPaths = collectRemainderPathsFromSubtract(rRaw);
-    const parentForRemainder = lowestCommonAncestor(
-      areas,
-      cluster.map(l => l.id)
-    );
-    // If the cluster was a whimsy piece, preserve its type in the remainder.
-    // ROOT and SUBDIVISION types always produce SUBDIVISION remainders.
-    const originalType = cluster.length === 1 && cluster[0].type === AreaType.WHIMSY
-      ? AreaType.WHIMSY
-      : undefined;
-
-    rPaths.forEach(rp => {
-      remainderSpecs.push({ parentId: parentForRemainder, path: rp, clusterIndex: ci, originalType });
-    });
-  }
-
-  stencil.remove();
-
   if (!whimsyRaw || whimsyRaw.isEmpty()) {
     whimsyRaw?.remove();
-    remainderSpecs.forEach(s => s.path.remove());
+    stencil.remove();
     warnings.push('Whimsy overlap was empty after boolean ops.');
     return { warnings, remainderClusters: [] };
   }
@@ -487,7 +494,7 @@ export function applyAddWhimsyOp(
 
   if (!whimsyUnified) {
     whimsyRaw.remove();
-    remainderSpecs.forEach(s => s.path.remove());
+    stencil.remove();
     warnings.push('Whimsy overlap was empty after boolean ops.');
     return { warnings, remainderClusters: [] };
   }
@@ -495,17 +502,60 @@ export function applyAddWhimsyOp(
   const whimsyArea = (whimsyUnified instanceof paper.CompoundPath)
     ? whimsyUnified.children.reduce((acc, ch) => acc + Math.abs((ch as paper.Path).area), 0)
     : Math.abs((whimsyUnified as paper.Path).area);
-  // materialSum is now whimsyArea + sum of all remainder areas, but we can just use the totalMaterial area from before.
-  // Actually, whimsyArea is the most accurate measure of the whimsy itself.
-  const minAllowed = WHIMSY_MIN_AREA_ABS; 
+  const minAllowed = WHIMSY_MIN_AREA_ABS;
   if (whimsyArea < minAllowed) {
     whimsyUnified.remove();
-    remainderSpecs.forEach(s => s.path.remove());
+    whimsyRaw.remove();
+    stencil.remove();
     warnings.push(
       `Whimsy overlap is too small (≈${Math.round(whimsyArea)} px², need ≥${Math.round(minAllowed)} px²). Increase scale or move center.`
     );
     return { warnings, remainderClusters: [] };
   }
+
+  const clusterMap = new Map<string, Area[]>();
+  for (const leaf of participating) {
+    const r = find(leaf.id);
+    if (!clusterMap.has(r)) clusterMap.set(r, []);
+    clusterMap.get(r)!.push(leaf);
+  }
+  const clusters = Array.from(clusterMap.values())
+    .map(c => c.sort((a, b) => a.id.localeCompare(b.id)))
+    .sort((a, b) => a[0].id.localeCompare(b[0].id));
+
+  clusters.sort((a, b) => {
+    const ao = a.some(l => originalStencilOverlap.has(l.id)) ? 1 : 0;
+    const bo = b.some(l => originalStencilOverlap.has(l.id)) ? 1 : 0;
+    return bo - ao;
+  });
+
+  const clusterAnchorReps = clusters.map(c => find(c[0].id));
+
+  const remainderSpecs: { parentId: string; path: paper.PathItem; clusterIndex: number; originalType?: AreaType }[] = [];
+
+  for (let ci = 0; ci < clusters.length; ci++) {
+    const cluster = clusters[ci];
+    const parentForRemainder = lowestCommonAncestor(areas, cluster.map(l => l.id));
+    const originalType = cluster.length === 1 && cluster[0].type === AreaType.WHIMSY
+      ? AreaType.WHIMSY
+      : undefined;
+
+    const mat =
+      cluster.length === 1
+        ? pathItemFromBoundaryData(cluster[0].boundary)
+        : unionClusterBoundaries(cluster);
+    const st2 = stencil.clone({ insert: true }) as paper.Path;
+    const rRaw = mat.subtract(st2);
+    mat.remove();
+    st2.remove();
+
+    const rPaths = collectRemainderPathsFromSubtract(rRaw);
+    rPaths.forEach(rp => {
+      remainderSpecs.push({ parentId: parentForRemainder, path: rp, clusterIndex: ci, originalType });
+    });
+  }
+
+  stencil.remove();
 
   remainderSpecs.forEach((s, idx) => {
     const a = absPathItemArea(s.path);
