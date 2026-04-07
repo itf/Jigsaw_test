@@ -1,5 +1,5 @@
 import paper from 'paper';
-import { Area, AreaType, Connector } from '../types';
+import { Area, AreaType, Connector, Whimsy } from '../types';
 
 /**
  * Finds a neighbor piece by sampling a point slightly outside the current piece's boundary.
@@ -10,6 +10,7 @@ export function findNeighborPiece(
   point: paper.Point,
   normal: paper.Point
 ): string | null {
+  if (!point || !normal) return null;
   // Offset slightly along the normal to "look" into the neighbor
   const testPoint = point.add(normal.multiply(0.5));
   
@@ -37,9 +38,10 @@ export function generateConnectorPath(
   headTemplateId: string,
   headScale: number,
   headRotationDeg: number,
-  headOffset: number,
-  useEquidistantHeadPoint: boolean = true
-): { path: paper.PathItem, basePathData: string, headCenter: paper.Point } {
+  useEquidistantHeadPoint: boolean = true,
+  whimsies: Whimsy[] = [],
+  jitter: number = 0
+): { pathData: string, basePathData: string, headCenter: paper.Point } {
   const children = boundary instanceof paper.CompoundPath 
     ? (boundary.children.filter(c => c instanceof paper.Path) as paper.Path[])
     : [boundary as paper.Path];
@@ -52,8 +54,22 @@ export function generateConnectorPath(
   const t1 = midT - halfWidthT;
   const t2 = midT + halfWidthT;
   
-  const p1 = sourcePath.getPointAt(sourcePath.length * Math.max(0, Math.min(1, t1)));
-  const p2 = sourcePath.getPointAt(sourcePath.length * Math.max(0, Math.min(1, t2)));
+  const getWrappedPoint = (t: number) => {
+    const wrappedT = (t + 100) % 1; // Handle negative t
+    return sourcePath.getPointAt(sourcePath.length * wrappedT);
+  };
+  const getWrappedNormal = (t: number) => {
+    const wrappedT = (t + 100) % 1;
+    return sourcePath.getNormalAt(sourcePath.length * wrappedT);
+  };
+
+  const p1 = getWrappedPoint(t1);
+  const p2 = getWrappedPoint(t2);
+  
+  if (!p1 || !p2) {
+    // Fallback if points can't be found
+    return { pathData: '', basePathData: '', headCenter: new paper.Point(0, 0) };
+  }
   
   // 2. Calculate extrusion direction (normal to chord p1-p2)
   const chord = p2.subtract(p1); // Points from p1 to p2. If chordNormal is UP, chord is LEFT.
@@ -61,42 +77,60 @@ export function generateConnectorPath(
   const midPoint = sourcePath.getPointAt(sourcePath.length * midT);
   const midNormal = sourcePath.getNormalAt(sourcePath.length * midT);
   
+  if (!midPoint || !midNormal) {
+    return { pathData: '', basePathData: '', headCenter: new paper.Point(0, 0) };
+  }
+  
   // We want the normal to the chord that points in the same general direction as the boundary normal
   let chordNormal = new paper.Point(-chord.y, chord.x).normalize();
   if (chordNormal.dot(midNormal) < 0) {
     chordNormal = chordNormal.multiply(-1);
   }
   
-  const headCenter = midPoint.add(chordNormal.multiply(extrusion + headOffset));
+  const headCenter = midPoint.add(chordNormal.multiply(extrusion));
   
   let head: paper.PathItem;
-  if (headTemplateId === 'star') {
-    head = new paper.Path.Star({
-      center: headCenter,
-      points: 5,
-      radius1: 15 * headScale,
-      radius2: 7 * headScale,
+  const whimsy = whimsies.find(w => w.id === headTemplateId);
+
+  if (whimsy) {
+    head = new paper.CompoundPath({
+      pathData: whimsy.svgData,
       insert: false
     });
-  } else if (headTemplateId === 'square') {
-    head = new paper.Path.Rectangle({
-      center: headCenter,
-      size: [20 * headScale, 20 * headScale],
-      insert: false
-    });
-  } else if (headTemplateId === 'triangle') {
-    head = new paper.Path.RegularPolygon({
-      center: headCenter,
-      sides: 3,
-      radius: 15 * headScale,
-      insert: false
-    });
+    // Whimsies are normalized to radius 1 (approx 2x2 box)
+    // We want them to be roughly 24px wide at scale 1.0
+    head.scale(12 * headScale, new paper.Point(0, 0));
+    head.position = headCenter;
   } else {
-    head = new paper.Path.Circle({
-      center: headCenter,
-      radius: 12 * headScale,
-      insert: false
-    });
+    // Fallback for legacy templates
+    if (headTemplateId === 'star') {
+      head = new paper.Path.Star({
+        center: headCenter,
+        points: 5,
+        radius1: 15 * headScale,
+        radius2: 7 * headScale,
+        insert: false
+      });
+    } else if (headTemplateId === 'square') {
+      head = new paper.Path.Rectangle({
+        center: headCenter,
+        size: [20 * headScale, 20 * headScale],
+        insert: false
+      });
+    } else if (headTemplateId === 'triangle') {
+      head = new paper.Path.RegularPolygon({
+        center: headCenter,
+        sides: 3,
+        radius: 15 * headScale,
+        insert: false
+      });
+    } else {
+      head = new paper.Path.Circle({
+        center: headCenter,
+        radius: 12 * headScale,
+        insert: false
+      });
+    }
   }
 
   // Rotate head to align with chordNormal (neck direction)
@@ -141,7 +175,7 @@ export function generateConnectorPath(
   const leftHeadOffset = isPt1Left ? hOffset1 : hOffset2;
   const rightHeadOffset = isPt1Left ? hOffset2 : hOffset1;
 
-  // 4. Construct neck
+  // 4. Construct neck as a wedge that overlaps the head
   const neck = new paper.Path({ insert: false });
   
   // Bottom edge (along piece boundary from p1 to p2)
@@ -149,8 +183,15 @@ export function generateConnectorPath(
   const baseOnly = new paper.Path({ insert: false });
   for (let i = 0; i <= steps; i++) {
     const t = t1 + (t2 - t1) * (i / steps);
-    const pt = sourcePath.getPointAt(sourcePath.length * Math.max(0, Math.min(1, t)));
-    neck.add(pt);
+    const pt = getWrappedPoint(t);
+    const normal = getWrappedNormal(t);
+    
+    if (!pt || !normal) continue;
+    
+    // Extend slightly into the piece for robust union (skirt)
+    const extendedPt = pt.subtract(normal.multiply(0.5));
+    neck.add(extendedPt);
+    
     baseOnly.add(pt);
   }
   const basePathData = baseOnly.pathData;
@@ -159,29 +200,41 @@ export function generateConnectorPath(
   // Side edge 1: p2 (left) to leftHeadPt
   neck.add(leftHeadPt);
   
-  // Top edge (along head boundary, from leftHeadPt to rightHeadPt)
-  let diff = rightHeadOffset - leftHeadOffset;
-  if (Math.abs(diff) > headPath.length / 2) {
-    diff = diff > 0 ? diff - headPath.length : diff + headPath.length;
-  }
-  
-  for (let i = 1; i < steps; i++) {
-    const offset = leftHeadOffset + diff * (i / steps);
-    let wrappedOffset = offset % headPath.length;
-    if (wrappedOffset < 0) wrappedOffset += headPath.length;
-    neck.add(headPath.getPointAt(wrappedOffset));
-  }
+  // Deep point to ensure overlap (the head center)
+  neck.add(headCenter);
   
   // Side edge 2: rightHeadPt to p1 (handled by closing the path)
   neck.add(rightHeadPt);
   neck.closed = true;
   
-  // 5. Combine
+  // 5. Combine using boolean union
   const combined = neck.unite(head);
-  combined.remove();
+
+  // 6. Apply Jitter if requested
+  if (jitter > 0) {
+    const applyJitter = (path: paper.Path) => {
+      path.segments.forEach(seg => {
+        seg.point = seg.point.add(new paper.Point(
+          (Math.random() - 0.5) * jitter,
+          (Math.random() - 0.5) * jitter
+        ));
+      });
+    };
+    if (combined instanceof paper.Path) {
+      applyJitter(combined);
+    } else if (combined instanceof paper.CompoundPath) {
+      combined.children.forEach(child => {
+        if (child instanceof paper.Path) applyJitter(child);
+      });
+    }
+  }
+
+  const pathData = combined.pathData;
   
+  // Cleanup
   neck.remove();
   head.remove();
+  combined.remove();
   
-  return { path: combined, basePathData, headCenter };
+  return { pathData, basePathData, headCenter };
 }

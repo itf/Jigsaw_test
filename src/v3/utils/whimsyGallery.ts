@@ -1,6 +1,6 @@
 import { circlePathData } from './initialArea';
 
-export type WhimsyTemplateId = 'circle' | 'star';
+export type WhimsyTemplateId = 'circle' | 'star' | 'square' | 'triangle';
 
 /** Normalized path centered at (0,0). Circle: radius 1. Star: outer radius 1. */
 export function getWhimsyTemplatePathData(templateId: WhimsyTemplateId): string {
@@ -9,6 +9,10 @@ export function getWhimsyTemplatePathData(templateId: WhimsyTemplateId): string 
       return circlePathData(0, 0, 1, 72);
     case 'star':
       return fivePointStarPathData(1, 0.38);
+    case 'square':
+      return `M -1 -1 L 1 -1 L 1 1 L -1 1 Z`;
+    case 'triangle':
+      return `M 0 -1 L 1 1 L -1 1 Z`;
     default:
       return '';
   }

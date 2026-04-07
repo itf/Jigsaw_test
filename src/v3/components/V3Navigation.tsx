@@ -1,5 +1,5 @@
 import React from 'react';
-import { Move, Layers, Link as LinkIcon, Zap, Type, Download } from 'lucide-react';
+import { Move, Layers, Link as LinkIcon, Zap, Type, Download, Network } from 'lucide-react';
 import { Tab } from '../../v2/constants';
 
 interface V3NavigationProps {
@@ -12,6 +12,7 @@ export const V3Navigation: React.FC<V3NavigationProps> = ({ activeTab, setActive
     { id: 'TOPOLOGY', icon: Move, label: 'Topology' },
     { id: 'MODIFICATION', icon: Layers, label: 'Modification' },
     { id: 'CONNECTION', icon: LinkIcon, label: 'Connection' },
+    { id: 'MASS_CONNECTION', icon: Network, label: 'Mass' },
     { id: 'RESOLUTION', icon: Zap, label: 'Resolution' },
     { id: 'TRANSFORMATION', icon: Type, label: 'Transformation' },
     { id: 'PRODUCTION', icon: Download, label: 'Production' },

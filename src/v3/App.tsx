@@ -4,6 +4,7 @@ import { V3Header } from './components/V3Header';
 import { V3Navigation } from './components/V3Navigation';
 import { V3ActionBar } from './components/V3ActionBar';
 import { V3Canvas } from './components/V3Canvas';
+import { V3ProductionTab } from './components/V3ProductionTab';
 import { V3CreateModal } from './components/V3CreateModal';
 import { Tab } from '../v2/constants';
 import { Point, AreaType } from './types';
@@ -29,7 +30,7 @@ export default function V3App() {
   const [splitPattern, setSplitPattern] = useState<'GRID' | 'HEX' | 'RANDOM'>('GRID');
 
   // Whimsy Parameters
-  const [whimsyTemplate, setWhimsyTemplate] = useState<'circle' | 'star'>('circle');
+  const [whimsyTemplate, setWhimsyTemplate] = useState<string>('circle');
   const [whimsyScale, setWhimsyScale] = useState(56);
   const [whimsyRotationDeg, setWhimsyRotationDeg] = useState(0);
   const [whimsyPlacementActive, setWhimsyPlacementActive] = useState(false);
@@ -42,7 +43,7 @@ export default function V3App() {
   const [connectorHeadTemplate, setConnectorHeadTemplate] = useState('circle');
   const [connectorHeadScale, setConnectorHeadScale] = useState(1.0);
   const [connectorHeadRotation, setConnectorHeadRotation] = useState(0);
-  const [connectorHeadOffset, setConnectorHeadOffset] = useState(0);
+  const [connectorJitter, setConnectorJitter] = useState(0);
   const [useEquidistantHeadPoint, setUseEquidistantHeadPoint] = useState(true);
   const [selectedConnectorId, setSelectedConnectorId] = useState<string | null>(null);
   const lastConnectorClickTime = useRef(0);
@@ -56,12 +57,16 @@ export default function V3App() {
     addConnector,
     updateConnector,
     removeConnector,
+    addWhimsyToLibrary,
+    removeWhimsyFromLibrary,
+    addMassConnectors,
+    resolveConnectorConflicts,
     validateGrid,
     cleanPuzzle,
     reset 
   } = usePuzzleEngineV3();
 
-  const { areas, connectors, width, height } = puzzleState;
+  const { areas, connectors, whimsies, width, height } = puzzleState;
 
   // Sync connection parameters when a connector is selected
   useEffect(() => {
@@ -74,7 +79,7 @@ export default function V3App() {
       setConnectorHeadTemplate(c.headTemplateId);
       setConnectorHeadScale(c.headScale);
       setConnectorHeadRotation(c.headRotationDeg);
-      setConnectorHeadOffset(c.headOffset);
+      setConnectorJitter(c.jitter || 0);
       setUseEquidistantHeadPoint(c.useEquidistantHeadPoint !== undefined ? c.useEquidistantHeadPoint : true);
     }
   }, [selectedConnectorId]); // Only sync when selection changes
@@ -90,11 +95,11 @@ export default function V3App() {
         headTemplateId: connectorHeadTemplate,
         headScale: connectorHeadScale,
         headRotationDeg: connectorHeadRotation,
-        headOffset: connectorHeadOffset,
+        jitter: connectorJitter,
         useEquidistantHeadPoint: useEquidistantHeadPoint
       });
     }
-  }, [selectedConnectorId, connectionT, connectionPathIndex, connectorWidthPx, connectorExtrusion, connectorHeadTemplate, connectorHeadScale, connectorHeadRotation, connectorHeadOffset, useEquidistantHeadPoint, updateConnector]);
+  }, [selectedConnectorId, connectionT, connectionPathIndex, connectorWidthPx, connectorExtrusion, connectorHeadTemplate, connectorHeadScale, connectorHeadRotation, connectorJitter, useEquidistantHeadPoint, updateConnector]);
 
   const maxPathIndex = useMemo(() => {
     if (selectedIds.length !== 1) return 0;
@@ -216,10 +221,10 @@ export default function V3App() {
       headTemplateId: connectorHeadTemplate,
       headScale: connectorHeadScale,
       headRotationDeg: connectorHeadRotation,
-      headOffset: connectorHeadOffset,
+      jitter: connectorJitter,
       useEquidistantHeadPoint: useEquidistantHeadPoint
     });
-  }, [selectedIds, connectionT, connectionPathIndex, connectorWidthPx, connectorExtrusion, connectorHeadTemplate, connectorHeadScale, connectorHeadRotation, connectorHeadOffset, useEquidistantHeadPoint, addConnector]);
+  }, [selectedIds, connectionT, connectionPathIndex, connectorWidthPx, connectorExtrusion, connectorHeadTemplate, connectorHeadScale, connectorHeadRotation, connectorJitter, useEquidistantHeadPoint, addConnector]);
 
   const fitScale = Math.max(0.1, Math.min(containerSize.w / (width || 800), containerSize.h / (height || 600)) * 0.9);
 
@@ -278,44 +283,53 @@ export default function V3App() {
         setConnectorHeadScale={setConnectorHeadScale}
         connectorHeadRotation={connectorHeadRotation}
         setConnectorHeadRotation={setConnectorHeadRotation}
-        connectorHeadOffset={connectorHeadOffset}
-        setConnectorHeadOffset={setConnectorHeadOffset}
         useEquidistantHeadPoint={useEquidistantHeadPoint}
         setUseEquidistantHeadPoint={setUseEquidistantHeadPoint}
         onAddConnector={handleAddConnector}
         selectedConnectorId={selectedConnectorId}
         onRemoveConnector={removeConnector}
+        connectorJitter={connectorJitter}
+        setConnectorJitter={setConnectorJitter}
+        onAddMassConnectors={addMassConnectors}
+        onResolveConflicts={resolveConnectorConflicts}
+        whimsies={whimsies}
+        onUploadWhimsy={addWhimsyToLibrary}
+        onRemoveWhimsy={removeWhimsyFromLibrary}
       />
 
       <main className="flex-1 relative overflow-hidden flex flex-col" ref={containerRef}>
-        <V3Canvas 
-          puzzleState={puzzleState}
-          selectedIds={selectedIds}
-          hoveredId={hoveredId}
-          onHover={setHoveredId}
-          onClick={handlePieceClick}
-          fitScale={fitScale}
-          whimsyPlacementActive={whimsyPlacementActive}
-          whimsyTemplate={whimsyTemplate}
-          whimsyScale={whimsyScale}
-          whimsyRotationDeg={whimsyRotationDeg}
-          onWhimsyCommit={handleWhimsyCommit}
-          activeTab={activeTab}
-          connectionT={connectionT}
-          connectionPathIndex={connectionPathIndex}
-          onConnectionUpdate={handleConnectionUpdate}
-          connectorWidthPx={connectorWidthPx}
-          setConnectorWidthPx={setConnectorWidthPx}
-          connectorExtrusion={connectorExtrusion}
-          connectorHeadTemplate={connectorHeadTemplate}
-          connectorHeadScale={connectorHeadScale}
-          connectorHeadRotation={connectorHeadRotation}
-          connectorHeadOffset={connectorHeadOffset}
-          useEquidistantHeadPoint={useEquidistantHeadPoint}
-          selectedConnectorId={selectedConnectorId}
-          onConnectorSelect={handleConnectorSelect}
-          onConnectorUpdate={updateConnector}
-        />
+        {activeTab === 'PRODUCTION' ? (
+          <V3ProductionTab puzzleState={puzzleState} />
+        ) : (
+          <V3Canvas 
+            puzzleState={puzzleState}
+            selectedIds={selectedIds}
+            hoveredId={hoveredId}
+            onHover={setHoveredId}
+            onClick={handlePieceClick}
+            fitScale={fitScale}
+            whimsyPlacementActive={whimsyPlacementActive}
+            whimsyTemplate={whimsyTemplate}
+            whimsyScale={whimsyScale}
+            whimsyRotationDeg={whimsyRotationDeg}
+            onWhimsyCommit={handleWhimsyCommit}
+            activeTab={activeTab}
+            connectionT={connectionT}
+            connectionPathIndex={connectionPathIndex}
+            onConnectionUpdate={handleConnectionUpdate}
+            connectorWidthPx={connectorWidthPx}
+            setConnectorWidthPx={setConnectorWidthPx}
+            connectorExtrusion={connectorExtrusion}
+            connectorHeadTemplate={connectorHeadTemplate}
+            connectorHeadScale={connectorHeadScale}
+            connectorHeadRotation={connectorHeadRotation}
+            connectorJitter={connectorJitter}
+            useEquidistantHeadPoint={useEquidistantHeadPoint}
+            selectedConnectorId={selectedConnectorId}
+            onConnectorSelect={handleConnectorSelect}
+            onConnectorUpdate={updateConnector}
+          />
+        )}
       </main>
     </div>
   );

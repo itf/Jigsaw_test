@@ -27,13 +27,22 @@ export interface Connector {
   headTemplateId: string;
   headScale: number;
   headRotationDeg: number;
-  headOffset: number; // Offset along the neck normal
   useEquidistantHeadPoint?: boolean;
+  jitter?: number;
+  disabled?: boolean;
+}
+
+export interface Whimsy {
+  id: string;
+  name: string;
+  svgData: string; // SVG path data (d attribute)
+  category?: string;
 }
 
 export interface PuzzleState {
   areas: Record<string, Area>;
   connectors: Record<string, Connector>;
+  whimsies: Whimsy[]; // Library of available whimsies
   rootAreaId: string;
   width: number;
   height: number;

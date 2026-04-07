@@ -1,11 +1,12 @@
 import { useState, useCallback, useMemo } from 'react';
 import paper from 'paper';
 import { Delaunay } from 'd3-delaunay';
-import { Area, AreaType, Operation, OperationType, PuzzleState, Point, Connector } from '../types';
+import { Area, AreaType, Operation, OperationType, PuzzleState, Point, Connector, Whimsy } from '../types';
 import { resetPaperProject } from '../utils/paperUtils';
 import { generateGridPoints, generateHexGridPoints, generateRandomPoints } from '../utils/gridUtils';
 import { getWhimsyTemplatePathData, WhimsyTemplateId } from '../utils/whimsyGallery';
 import { validateAndCleanState } from '../utils/puzzleValidation';
+import { findNeighborPiece, generateConnectorPath } from '../utils/connectorUtils';
 
 const COLORS = [
   '#f87171', '#fb923c', '#fbbf24', '#facc15', '#a3e635', '#4ade80', 
@@ -57,6 +58,12 @@ export function usePuzzleEngineV3() {
   const [width, setWidth] = useState(800);
   const [height, setHeight] = useState(600);
   const [rootAreaId, setRootAreaId] = useState<string | null>(null);
+  const [whimsies, setWhimsies] = useState<Whimsy[]>([
+    { id: 'circle', name: 'Circle', svgData: getWhimsyTemplatePathData('circle'), category: 'Basic' },
+    { id: 'star', name: 'Star', svgData: getWhimsyTemplatePathData('star'), category: 'Basic' },
+    { id: 'square', name: 'Square', svgData: getWhimsyTemplatePathData('square'), category: 'Basic' },
+    { id: 'triangle', name: 'Triangle', svgData: getWhimsyTemplatePathData('triangle'), category: 'Basic' },
+  ]);
 
   const createRoot = useCallback((w: number, h: number) => {
     console.log('usePuzzleEngineV3: createRoot', w, h);
@@ -290,8 +297,13 @@ export function usePuzzleEngineV3() {
     
     setAreas(prev => {
       resetPaperProject(width, height);
-      const stem = getWhimsyTemplatePathData(templateId as WhimsyTemplateId);
-      const whimsyPath = new paper.Path(stem);
+      const whimsy = whimsies.find(w => w.id === templateId);
+      const stem = whimsy ? whimsy.svgData : getWhimsyTemplatePathData(templateId as WhimsyTemplateId);
+      
+      const whimsyPath = new paper.CompoundPath({
+        pathData: stem,
+        insert: false
+      });
       whimsyPath.closed = true;
       whimsyPath.scale(scale, new paper.Point(0, 0));
       whimsyPath.rotate(rotationDeg, new paper.Point(0, 0));
@@ -413,13 +425,169 @@ export function usePuzzleEngineV3() {
     });
   }, []);
 
+  const addWhimsyToLibrary = useCallback((whimsy: Whimsy) => {
+    setWhimsies(prev => [...prev, whimsy]);
+  }, []);
+
+  const removeWhimsyFromLibrary = useCallback((id: string) => {
+    setWhimsies(prev => prev.filter(w => w.id !== id));
+  }, []);
+
+  const addMassConnectors = useCallback((params: { 
+    pieceIds: string[], 
+    widthRange: [number, number],
+    extrusionRange: [number, number],
+    positionOffsetRange: [number, number],
+    headTemplateId: string,
+    headScaleRange: [number, number],
+    headRotationRange: [number, number],
+    jitterRange: [number, number]
+  }) => {
+    const { 
+      pieceIds, 
+      widthRange, 
+      extrusionRange, 
+      positionOffsetRange, 
+      headTemplateId, 
+      headScaleRange, 
+      headRotationRange,
+      jitterRange
+    } = params;
+
+    setConnectors(prev => {
+      const next = { ...prev };
+      
+      pieceIds.forEach(id => {
+        const area = areas[id];
+        if (!area || area.type !== AreaType.PIECE) return;
+        
+        const boundary = area.boundary;
+        const children = boundary instanceof paper.CompoundPath 
+          ? (boundary.children.filter(c => c instanceof paper.Path) as paper.Path[])
+          : [boundary as paper.Path];
+
+        children.forEach((path, pathIndex) => {
+          const samples = 20;
+          const neighborSegments = new Map<string, { tStart: number, tEnd: number }[]>();
+          
+          let currentNeighbor: string | null = null;
+          let segmentStart = 0;
+
+          for (let i = 0; i <= samples; i++) {
+            const t = i / samples;
+            const pt = path.getPointAt(path.length * t);
+            const normal = path.getNormalAt(path.length * t);
+            const neighborId = findNeighborPiece(areas, id, pt, normal);
+            
+            if (neighborId !== currentNeighbor) {
+              if (currentNeighbor && pieceIds.includes(currentNeighbor)) {
+                if (!neighborSegments.has(currentNeighbor)) neighborSegments.set(currentNeighbor, []);
+                neighborSegments.get(currentNeighbor)!.push({ tStart: segmentStart, tEnd: t });
+              }
+              currentNeighbor = neighborId;
+              segmentStart = t;
+            }
+          }
+
+          neighborSegments.forEach((segments, neighborId) => {
+            if (id > neighborId) return;
+
+            segments.forEach(seg => {
+              const midT = (seg.tStart + seg.tEnd) / 2;
+              const rand = (range: [number, number]) => range[0] + Math.random() * (range[1] - range[0]);
+              
+              const connectorId = `connector-${Math.random().toString(36).slice(2, 6)}`;
+              next[connectorId] = {
+                id: connectorId,
+                pieceId: id,
+                pathIndex,
+                midT: midT + (Math.random() - 0.5) * rand(positionOffsetRange),
+                widthPx: rand(widthRange),
+                extrusion: rand(extrusionRange),
+                headTemplateId,
+                headScale: rand(headScaleRange),
+                headRotationDeg: rand(headRotationRange),
+                jitter: rand(jitterRange),
+                useEquidistantHeadPoint: true
+              };
+            });
+          });
+        });
+      });
+
+      return next;
+    });
+  }, [areas]);
+
+  const resolveConnectorConflicts = useCallback(() => {
+    setConnectors(prev => {
+      const next = { ...prev };
+      const connectorList = Object.values(next) as Connector[];
+      
+      // Reset all to enabled first
+      connectorList.forEach(c => c.disabled = false);
+
+      // Pre-calculate paths for all connectors
+      const paths: Record<string, paper.PathItem> = {};
+      connectorList.forEach(c => {
+        const area = areas[c.pieceId];
+        if (!area) return;
+        try {
+          const result = generateConnectorPath(
+            area.boundary,
+            c.pathIndex,
+            c.midT,
+            c.widthPx,
+            c.extrusion,
+            c.headTemplateId,
+            c.headScale,
+            c.headRotationDeg,
+            c.useEquidistantHeadPoint,
+            whimsies,
+            c.jitter
+          );
+          paths[c.id] = new paper.CompoundPath({ pathData: result.pathData, insert: false });
+        } catch (e) {
+          console.error('Error calculating path for conflict resolution:', e);
+        }
+      });
+
+      // Check for intersections
+      for (let i = 0; i < connectorList.length; i++) {
+        const c1 = connectorList[i];
+        const p1 = paths[c1.id];
+        if (!p1) continue;
+
+        for (let j = i + 1; j < connectorList.length; j++) {
+          const c2 = connectorList[j];
+          const p2 = paths[c2.id];
+          if (!p2) continue;
+
+          if (p1.intersects(p2)) {
+            // Disable one of them (the one with the "smaller" ID to be deterministic)
+            if (c1.id < c2.id) {
+              next[c1.id].disabled = true;
+            } else {
+              next[c2.id].disabled = true;
+            }
+          }
+        }
+      }
+
+      // Cleanup
+      Object.values(paths).forEach(p => p.remove());
+      return next;
+    });
+  }, [areas, whimsies]);
+
   const puzzleState = useMemo(() => ({
     areas,
     connectors,
+    whimsies,
     rootAreaId: rootAreaId || '',
     width,
     height
-  }), [areas, connectors, rootAreaId, width, height]);
+  }), [areas, connectors, whimsies, rootAreaId, width, height]);
 
   return {
     puzzleState,
@@ -430,6 +598,10 @@ export function usePuzzleEngineV3() {
     addConnector,
     updateConnector,
     removeConnector,
+    addWhimsyToLibrary,
+    removeWhimsyFromLibrary,
+    addMassConnectors,
+    resolveConnectorConflicts,
     validateGrid,
     cleanPuzzle,
     reset: () => { setAreas({}); setConnectors({}); setRootAreaId(null); }

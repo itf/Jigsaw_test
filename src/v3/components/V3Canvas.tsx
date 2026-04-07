@@ -21,7 +21,7 @@ interface V3CanvasProps {
   onClick: (id: string | null, point?: Point) => void;
   fitScale: number;
   whimsyPlacementActive: boolean;
-  whimsyTemplate: 'circle' | 'star';
+  whimsyTemplate: string;
   whimsyScale: number;
   whimsyRotationDeg: number;
   onWhimsyCommit: (p: Point) => void;
@@ -34,7 +34,7 @@ interface V3CanvasProps {
   connectorHeadTemplate: string;
   connectorHeadScale: number;
   connectorHeadRotation: number;
-  connectorHeadOffset: number;
+  connectorJitter: number;
   useEquidistantHeadPoint: boolean;
   selectedConnectorId: string | null;
   onConnectorSelect: (id: string | null) => void;
@@ -62,13 +62,13 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
   connectorHeadTemplate,
   connectorHeadScale,
   connectorHeadRotation,
-  connectorHeadOffset,
+  connectorJitter,
   useEquidistantHeadPoint,
   selectedConnectorId,
   onConnectorSelect,
   onConnectorUpdate,
 }) => {
-  const { areas, connectors, width, height } = puzzleState;
+  const { areas, connectors, whimsies, width, height } = puzzleState;
   const outerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -127,8 +127,10 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
 
   const whimsyPreviewPathData = useMemo(() => {
     if (!whimsyPlacementActive) return null;
+    const whimsy = whimsies.find(w => w.id === whimsyTemplate);
+    if (whimsy) return whimsy.svgData;
     return getWhimsyTemplatePathData(whimsyTemplate as WhimsyTemplateId);
-  }, [whimsyPlacementActive, whimsyTemplate]);
+  }, [whimsyPlacementActive, whimsyTemplate, whimsies]);
 
   const [mousePos, setMousePos] = useState<Point>({ x: 0, y: 0 });
 
@@ -151,8 +153,9 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
         connectorHeadTemplate,
         connectorHeadScale,
         connectorHeadRotation,
-        connectorHeadOffset,
-        useEquidistantHeadPoint
+        useEquidistantHeadPoint,
+        whimsies,
+        connectorJitter
       );
 
       return { 
@@ -160,14 +163,14 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
         normal: { x: normal.x, y: normal.y },
         neighborId,
         boundary: piece.boundary,
-        previewPath: preview.path.pathData,
+        previewPath: preview.pathData,
         basePathData: preview.basePathData,
       };
     } catch (e) {
       console.error('Failed to get connection data:', e);
       return null;
     }
-  }, [activeTab, selectedIds, areas, connectionT, connectionPathIndex, connectorWidthPx, connectorExtrusion, connectorHeadTemplate, connectorHeadScale, connectorHeadRotation, connectorHeadOffset]);
+  }, [activeTab, selectedIds, areas, connectionT, connectionPathIndex, connectorWidthPx, connectorExtrusion, connectorHeadTemplate, connectorHeadScale, connectorHeadRotation, connectorJitter, whimsies]);
 
   const renderedConnectors = useMemo(() => {
     return (Object.values(connectors) as Connector[]).map(c => {
@@ -183,8 +186,9 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
           c.headTemplateId,
           c.headScale,
           c.headRotationDeg,
-          c.headOffset,
-          c.useEquidistantHeadPoint
+          c.useEquidistantHeadPoint,
+          whimsies,
+          c.jitter || 0
         );
         const pt = getPointOnBoundary(piece.boundary, c.midT, c.pathIndex);
         const normal = getNormalOnBoundary(piece.boundary, c.midT, c.pathIndex);
@@ -192,7 +196,7 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
         return {
           id: c.id,
           pieceId: c.pieceId,
-          pathData: result.path.pathData,
+          pathData: result.pathData,
           basePathData: result.basePathData,
           color: piece.color,
           point: { x: pt.x, y: pt.y },
@@ -203,7 +207,7 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
         return null;
       }
     }).filter(Boolean);
-  }, [connectors, areas]);
+  }, [connectors, areas, whimsies]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     let clientX, clientY;
@@ -327,16 +331,20 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
           {/* Render Connectors */}
           {renderedConnectors.map(c => {
             const isSelected = selectedConnectorId === c!.id;
+            const isDisabled = connectors[c!.id]?.disabled;
             const isPieceSelected = selectedIds.includes(c!.pieceId);
             // Show handle if:
             // 1. The connector itself is selected
             // 2. OR if no connector is selected, it's the connection tab, and the piece is selected
             const showHandle = activeTab === 'CONNECTION' && (isSelected || (isPieceSelected && !selectedConnectorId));
 
+            if (isDisabled && activeTab !== 'CONNECTION') return null;
+
             return (
               <g 
                 key={c!.id} 
                 className={activeTab === 'CONNECTION' ? 'cursor-pointer' : 'pointer-events-none'}
+                opacity={isDisabled ? 0.3 : 1}
                 onClick={(e) => {
                   if (activeTab === 'CONNECTION') {
                     e.stopPropagation();

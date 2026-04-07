@@ -84,7 +84,7 @@ export function validateAndCleanState(areas: Record<string, Area>): Record<strin
  * Helper to split a PathItem into its disconnected components.
  * Each component is a PathItem (Path or CompoundPath) that is internally connected.
  */
-function getDisconnectedComponents(path: paper.PathItem): paper.PathItem[] {
+export function getDisconnectedComponents(path: paper.PathItem): paper.PathItem[] {
   if (path instanceof paper.Path) {
     return [path.clone({ insert: false })];
   }

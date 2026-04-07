@@ -1,6 +1,10 @@
-import React from 'react';
-import { Grid, Hexagon, Shuffle, Link as LinkIcon, Download, RefreshCw, Trash2, X, Layers, Merge, Circle, Star, Sparkles, Plus } from 'lucide-react';
+import React, { useState } from 'react';
+import { Grid, Hexagon, Shuffle, Link as LinkIcon, Download, RefreshCw, Trash2, X, Layers, Merge, Circle, Star, Sparkles, Plus, Book, Network } from 'lucide-react';
 import { Tab } from '../../v2/constants';
+import { WheelSlider } from './ui/WheelSlider';
+import { WhimsyLibrary } from './WhimsyLibrary';
+import { Whimsy } from '../types';
+import { V3MassConnectionTab } from './V3MassConnectionTab';
 
 interface V3ActionBarProps {
   activeTab: Tab;
@@ -23,8 +27,8 @@ interface V3ActionBarProps {
   onCleanPuzzle: () => void;
   selectedIds: string[];
   onMerge: () => void;
-  whimsyTemplate: 'circle' | 'star';
-  setWhimsyTemplate: (t: 'circle' | 'star') => void;
+  whimsyTemplate: string;
+  setWhimsyTemplate: (t: string) => void;
   whimsyScale: number;
   setWhimsyScale: (v: number) => void;
   whimsyRotationDeg: number;
@@ -47,13 +51,18 @@ interface V3ActionBarProps {
   setConnectorHeadScale: (v: number) => void;
   connectorHeadRotation: number;
   setConnectorHeadRotation: (v: number) => void;
-  connectorHeadOffset: number;
-  setConnectorHeadOffset: (v: number) => void;
   useEquidistantHeadPoint: boolean;
   setUseEquidistantHeadPoint: (v: boolean) => void;
   onAddConnector: () => void;
   selectedConnectorId: string | null;
   onRemoveConnector: (id: string) => void;
+  connectorJitter: number;
+  setConnectorJitter: (v: number) => void;
+  onAddMassConnectors: (params: any) => void;
+  onResolveConflicts: () => void;
+  whimsies: Whimsy[];
+  onUploadWhimsy: (w: Whimsy) => void;
+  onRemoveWhimsy: (id: string) => void;
 }
 
 const Label: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -115,18 +124,29 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
   setConnectorHeadScale,
   connectorHeadRotation,
   setConnectorHeadRotation,
-  connectorHeadOffset,
-  setConnectorHeadOffset,
   useEquidistantHeadPoint,
   setUseEquidistantHeadPoint,
   onAddConnector,
   selectedConnectorId,
   onRemoveConnector,
+  connectorJitter,
+  setConnectorJitter,
+  onAddMassConnectors,
+  onResolveConflicts,
+  whimsies,
+  onUploadWhimsy,
+  onRemoveWhimsy,
 }) => {
+  const [showWhimsyLibrary, setShowWhimsyLibrary] = useState(false);
+  const [libraryMode, setLibraryMode] = useState<'WHIMSY' | 'CONNECTOR'>('WHIMSY');
+
   const canSubdivide = selectedIds.length > 0;
 
+  const currentWhimsy = whimsies.find(w => w.id === whimsyTemplate);
+  const currentConnectorHead = whimsies.find(w => w.id === connectorHeadTemplate);
+
   return (
-    <div className="bg-white border-b border-slate-200 z-30 shrink-0">
+    <div className="bg-white border-b border-slate-200 z-30 shrink-0 relative">
       <div className="flex items-center gap-3 px-4 py-2 flex-wrap">
         {activeTab === 'TOPOLOGY' && (
           <>
@@ -174,7 +194,7 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
                 type="range" 
                 min="0" 
                 max="1" 
-                step="0.05" 
+                step="0.01" 
                 value={jitter} 
                 onChange={e => setJitter(Number(e.target.value))}
                 className="w-16 h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-indigo-600"
@@ -216,36 +236,50 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
 
             <Divider />
 
-            <div className="flex items-center gap-2 flex-wrap shrink-0">
-              <Label>Whimsy</Label>
-              <button
-                type="button"
-                onClick={() => setWhimsyTemplate('circle')}
-                className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[10px] font-bold transition-all ${
-                  whimsyTemplate === 'circle'
-                    ? 'bg-violet-100 border-violet-400 text-violet-800'
-                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:border-violet-300'
-                }`}
-              >
-                <Circle className="w-3 h-3" />
-                Circle
-              </button>
-              <button
-                type="button"
-                onClick={() => setWhimsyTemplate('star')}
-                className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[10px] font-bold transition-all ${
-                  whimsyTemplate === 'star'
-                    ? 'bg-violet-100 border-violet-400 text-violet-800'
-                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:border-violet-300'
-                }`}
-              >
-                <Star className="w-3 h-3" />
-                Star
-              </button>
-              <Label>Scale</Label>
-              <NumberInput value={whimsyScale} onChange={setWhimsyScale} min={8} max={800} width="w-12" />
-              <Label>Rot°</Label>
-              <NumberInput value={whimsyRotationDeg} onChange={setWhimsyRotationDeg} min={-360} max={360} width="w-12" />
+            <div className="flex items-center gap-4 flex-wrap shrink-0">
+              <div className="flex items-center gap-2">
+                <Label>Whimsy</Label>
+                <button
+                  type="button"
+                  onClick={() => { setShowWhimsyLibrary(!showWhimsyLibrary); setLibraryMode('WHIMSY'); }}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold transition-all ${
+                    showWhimsyLibrary && libraryMode === 'WHIMSY'
+                      ? 'bg-indigo-600 border-indigo-600 text-white'
+                      : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-300'
+                  }`}
+                >
+                  {currentWhimsy ? (
+                    <svg viewBox="0 0 100 100" className="w-3 h-3">
+                      <path d={currentWhimsy.svgData} fill="currentColor" />
+                    </svg>
+                  ) : <Book className="w-3 h-3" />}
+                  {currentWhimsy?.name || 'Library'}
+                </button>
+              </div>
+
+              <WheelSlider 
+                label="Scale" 
+                value={whimsyScale} 
+                onChange={setWhimsyScale} 
+                min={8} 
+                max={800} 
+                width="w-36" 
+              />
+              
+              <div className="flex items-center gap-2">
+                <Label>Rotation</Label>
+                <input 
+                  type="range" 
+                  min="0" 
+                  max="360" 
+                  step="1" 
+                  value={whimsyRotationDeg} 
+                  onChange={e => setWhimsyRotationDeg(Number(e.target.value))}
+                  className="w-16 h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                />
+                <span className="text-[9px] font-mono font-bold text-slate-400 w-8">{whimsyRotationDeg}°</span>
+              </div>
+
               {!whimsyPlacementActive ? (
                 <button
                   type="button"
@@ -295,7 +329,7 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
         )}
 
         {activeTab === 'CONNECTION' && (
-          <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-4 flex-wrap">
             <div className="flex items-center gap-2 px-3 py-1.5 text-emerald-600 bg-emerald-50 rounded-xl shrink-0">
               <LinkIcon className="w-3.5 h-3.5" />
               <span className="text-xs font-bold uppercase tracking-tight">Connectors</span>
@@ -312,48 +346,86 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
                 step="0.001" 
                 value={connectionT} 
                 onChange={e => setConnectionT(Number(e.target.value))}
-                className="w-24 h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-emerald-600"
+                className="w-20 h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-emerald-600"
               />
               <span className="text-[9px] font-mono font-bold text-slate-400 w-8">{connectionT.toFixed(3)}</span>
             </div>
 
-            <div className="flex items-center gap-2">
-              <Label>Width (px)</Label>
-              <NumberInput value={connectorWidthPx} onChange={setConnectorWidthPx} min={4} max={200} width="w-12" />
-            </div>
+            <WheelSlider 
+              label="Width" 
+              value={connectorWidthPx} 
+              onChange={setConnectorWidthPx} 
+              min={4} 
+              max={200} 
+              unit="px"
+              width="w-36" 
+            />
 
-            <div className="flex items-center gap-2">
-              <Label>Extrude</Label>
-              <NumberInput value={connectorExtrusion} onChange={setConnectorExtrusion} min={1} max={200} width="w-10" />
-            </div>
+            <WheelSlider 
+              label="Extrude" 
+              value={connectorExtrusion} 
+              onChange={setConnectorExtrusion} 
+              min={1} 
+              max={200} 
+              width="w-36" 
+            />
 
             <div className="flex items-center gap-2">
               <Label>Head</Label>
-              <select
-                value={connectorHeadTemplate}
-                onChange={e => setConnectorHeadTemplate(e.target.value)}
-                className="h-7 px-2 rounded-lg text-[10px] font-bold border border-slate-100 bg-slate-50 text-slate-700 outline-none focus:ring-1 focus:ring-emerald-500"
+              <button
+                type="button"
+                onClick={() => { setShowWhimsyLibrary(!showWhimsyLibrary); setLibraryMode('CONNECTOR'); }}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold transition-all ${
+                  showWhimsyLibrary && libraryMode === 'CONNECTOR'
+                    ? 'bg-emerald-600 border-emerald-600 text-white'
+                    : 'bg-white border-slate-200 text-slate-600 hover:border-emerald-300'
+                }`}
               >
-                <option value="circle">Circle</option>
-                <option value="star">Star</option>
-                <option value="square">Square</option>
-                <option value="triangle">Triangle</option>
-              </select>
+                {currentConnectorHead ? (
+                  <svg viewBox="0 0 100 100" className="w-3 h-3">
+                    <path d={currentConnectorHead.svgData} fill="currentColor" />
+                  </svg>
+                ) : <Book className="w-3 h-3" />}
+                {currentConnectorHead?.name || 'Library'}
+              </button>
+            </div>
+
+            <WheelSlider 
+              label="Scale" 
+              value={connectorHeadScale} 
+              onChange={setConnectorHeadScale} 
+              min={0.1} 
+              max={5} 
+              step={0.1}
+              width="w-36" 
+            />
+
+            <div className="flex items-center gap-2">
+              <Label>Rotation</Label>
+              <input 
+                type="range" 
+                min="0" 
+                max="360" 
+                step="1" 
+                value={connectorHeadRotation} 
+                onChange={e => setConnectorHeadRotation(Number(e.target.value))}
+                className="w-16 h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-emerald-600"
+              />
+              <span className="text-[9px] font-mono font-bold text-slate-400 w-8">{connectorHeadRotation}°</span>
             </div>
 
             <div className="flex items-center gap-2">
-              <Label>Scale</Label>
-              <NumberInput value={connectorHeadScale} onChange={setConnectorHeadScale} min={0.1} max={5} width="w-10" />
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Label>Rot°</Label>
-              <NumberInput value={connectorHeadRotation} onChange={setConnectorHeadRotation} min={-360} max={360} width="w-10" />
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Label>Offset</Label>
-              <NumberInput value={connectorHeadOffset} onChange={setConnectorHeadOffset} min={-100} max={100} width="w-10" />
+              <Label>Jitter</Label>
+              <input 
+                type="range" 
+                min="0" 
+                max="10" 
+                step="0.1" 
+                value={connectorJitter} 
+                onChange={e => setConnectorJitter(Number(e.target.value))}
+                className="w-16 h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-emerald-600"
+              />
+              <span className="text-[9px] font-mono font-bold text-slate-400 w-8">{connectorJitter.toFixed(1)}</span>
             </div>
 
             <div className="flex items-center gap-2">
@@ -403,14 +475,40 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
         )}
 
         {activeTab === 'PRODUCTION' && (
-          <button
-            type="button"
-            className="px-6 py-2 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-500 transition-all flex items-center gap-2"
-          >
-            <Download className="w-3.5 h-3.5" /> Export SVG (Coming Soon)
-          </button>
+          <div className="flex items-center gap-2 px-3 py-1.5 text-emerald-600 bg-emerald-50 rounded-xl shrink-0">
+            <Download className="w-3.5 h-3.5" />
+            <span className="text-xs font-bold uppercase tracking-tight">Production</span>
+          </div>
         )}
       </div>
+
+      {/* Whimsy Library Popover */}
+      {showWhimsyLibrary && (
+        <div className="absolute top-full left-4 mt-2 w-72 h-96 z-50 shadow-2xl">
+          <WhimsyLibrary 
+            whimsies={whimsies}
+            selectedId={libraryMode === 'WHIMSY' ? whimsyTemplate : connectorHeadTemplate}
+            onSelect={(w) => {
+              if (libraryMode === 'WHIMSY') setWhimsyTemplate(w.id);
+              else setConnectorHeadTemplate(w.id);
+              setShowWhimsyLibrary(false);
+            }}
+            onUpload={onUploadWhimsy}
+            onRemove={onRemoveWhimsy}
+          />
+        </div>
+      )}
+
+      {activeTab === 'MASS_CONNECTION' && (
+        <V3MassConnectionTab 
+          selectedIds={selectedIds}
+          whimsies={whimsies}
+          connectorHeadTemplate={connectorHeadTemplate}
+          setConnectorHeadTemplate={setConnectorHeadTemplate}
+          onAddMassConnectors={onAddMassConnectors}
+          onResolveConflicts={onResolveConflicts}
+        />
+      )}
 
       {selectedIds.length > 0 && (
         <div className="flex items-center gap-3 px-4 py-2 border-t border-slate-100 bg-slate-50 flex-wrap">
