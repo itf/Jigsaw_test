@@ -461,7 +461,6 @@ export function applyAddWhimsyOp(
     }
   }
 
-  // Clean up any absorbed leaf IDs (if the operation specifies they should be removed)
   if (params.absorbedLeafIds?.length) {
     params.absorbedLeafIds.forEach(id => {
       if (id !== lcaId && id !== whimsyId) delete areas[id];
