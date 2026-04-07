@@ -388,10 +388,19 @@ export function usePuzzleEngineV3() {
 
   const updateConnector = useCallback((id: string, updates: Partial<Connector>) => {
     setConnectors(prev => {
-      if (!prev[id]) return prev;
+      const current = prev[id];
+      if (!current) return prev;
+      
+      // Check if anything actually changed
+      const hasChanges = Object.entries(updates).some(([key, value]) => {
+        return current[key as keyof Connector] !== value;
+      });
+      
+      if (!hasChanges) return prev;
+      
       return {
         ...prev,
-        [id]: { ...prev[id], ...updates }
+        [id]: { ...current, ...updates }
       };
     });
   }, []);

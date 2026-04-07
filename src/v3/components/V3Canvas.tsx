@@ -35,6 +35,7 @@ interface V3CanvasProps {
   connectorHeadScale: number;
   connectorHeadRotation: number;
   connectorHeadOffset: number;
+  useEquidistantHeadPoint: boolean;
   selectedConnectorId: string | null;
   onConnectorSelect: (id: string | null) => void;
   onConnectorUpdate: (id: string, updates: Partial<Connector>) => void;
@@ -62,6 +63,7 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
   connectorHeadScale,
   connectorHeadRotation,
   connectorHeadOffset,
+  useEquidistantHeadPoint,
   selectedConnectorId,
   onConnectorSelect,
   onConnectorUpdate,
@@ -131,7 +133,7 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
   const [mousePos, setMousePos] = useState<Point>({ x: 0, y: 0 });
 
   const connectionData = useMemo(() => {
-    if (activeTab !== 'CONNECTION' || selectedIds.length !== 1) return null;
+    if (activeTab !== 'CONNECTION' || selectedIds.length !== 1 || selectedConnectorId) return null;
     const piece = areas[selectedIds[0]];
     if (!piece || piece.type !== AreaType.PIECE) return null;
     try {
@@ -149,7 +151,8 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
         connectorHeadTemplate,
         connectorHeadScale,
         connectorHeadRotation,
-        connectorHeadOffset
+        connectorHeadOffset,
+        useEquidistantHeadPoint
       );
 
       return { 
@@ -180,7 +183,8 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
           c.headTemplateId,
           c.headScale,
           c.headRotationDeg,
-          c.headOffset
+          c.headOffset,
+          c.useEquidistantHeadPoint
         );
         const pt = getPointOnBoundary(piece.boundary, c.midT, c.pathIndex);
         const normal = getNormalOnBoundary(piece.boundary, c.midT, c.pathIndex);
@@ -324,7 +328,8 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
           {renderedConnectors.map(c => {
             const isSelected = selectedConnectorId === c!.id;
             const isPieceSelected = selectedIds.includes(c!.pieceId);
-            const showHandle = activeTab === 'CONNECTION' && isPieceSelected;
+            // Only show handle if the connector itself is selected OR if no connector is selected and the piece is selected
+            const showHandle = activeTab === 'CONNECTION' && isPieceSelected && (isSelected || !selectedConnectorId);
 
             return (
               <g 
@@ -355,8 +360,16 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
                 {showHandle && (
                   <g 
                     className="cursor-move"
-                    onMouseDown={(e) => { e.stopPropagation(); setDraggingConnectorId(c!.id); }}
-                    onTouchStart={(e) => { e.stopPropagation(); setDraggingConnectorId(c!.id); }}
+                    onMouseDown={(e) => { 
+                      e.stopPropagation(); 
+                      setDraggingConnectorId(c!.id); 
+                      onConnectorSelect(c!.id); 
+                    }}
+                    onTouchStart={(e) => { 
+                      e.stopPropagation(); 
+                      setDraggingConnectorId(c!.id); 
+                      onConnectorSelect(c!.id); 
+                    }}
                   >
                     <circle
                       cx={c!.point.x}

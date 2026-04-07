@@ -28,6 +28,7 @@ export interface Connector {
   headScale: number;
   headRotationDeg: number;
   headOffset: number; // Offset along the neck normal
+  useEquidistantHeadPoint?: boolean;
 }
 
 export interface PuzzleState {

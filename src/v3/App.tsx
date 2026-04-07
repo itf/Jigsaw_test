@@ -8,6 +8,7 @@ import { V3CreateModal } from './components/V3CreateModal';
 import { Tab } from '../v2/constants';
 import { Point, AreaType } from './types';
 import { getPathCount, getClosestLocationOnBoundary } from './utils/paperUtils';
+import paper from 'paper';
 
 export default function V3App() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -42,7 +43,9 @@ export default function V3App() {
   const [connectorHeadScale, setConnectorHeadScale] = useState(1.0);
   const [connectorHeadRotation, setConnectorHeadRotation] = useState(0);
   const [connectorHeadOffset, setConnectorHeadOffset] = useState(0);
+  const [useEquidistantHeadPoint, setUseEquidistantHeadPoint] = useState(false);
   const [selectedConnectorId, setSelectedConnectorId] = useState<string | null>(null);
+  const lastConnectorClickTime = useRef(0);
 
   const { 
     puzzleState, 
@@ -72,8 +75,9 @@ export default function V3App() {
       setConnectorHeadScale(c.headScale);
       setConnectorHeadRotation(c.headRotationDeg);
       setConnectorHeadOffset(c.headOffset);
+      setUseEquidistantHeadPoint(c.useEquidistantHeadPoint || false);
     }
-  }, [selectedConnectorId, connectors]);
+  }, [selectedConnectorId]); // Only sync when selection changes
 
   // Update selected connector when parameters change
   useEffect(() => {
@@ -86,10 +90,11 @@ export default function V3App() {
         headTemplateId: connectorHeadTemplate,
         headScale: connectorHeadScale,
         headRotationDeg: connectorHeadRotation,
-        headOffset: connectorHeadOffset
+        headOffset: connectorHeadOffset,
+        useEquidistantHeadPoint: useEquidistantHeadPoint
       });
     }
-  }, [selectedConnectorId, connectionT, connectionPathIndex, connectorWidthPx, connectorExtrusion, connectorHeadTemplate, connectorHeadScale, connectorHeadRotation, connectorHeadOffset, updateConnector]);
+  }, [selectedConnectorId, connectionT, connectionPathIndex, connectorWidthPx, connectorExtrusion, connectorHeadTemplate, connectorHeadScale, connectorHeadRotation, connectorHeadOffset, useEquidistantHeadPoint, updateConnector]);
 
   const maxPathIndex = useMemo(() => {
     if (selectedIds.length !== 1) return 0;
@@ -152,12 +157,17 @@ export default function V3App() {
   }, [whimsyTemplate, whimsyScale, whimsyRotationDeg, addWhimsy]);
 
   const handlePieceClick = useCallback((id: string | null, pt?: Point) => {
+    // Prevent piece click from firing immediately after a connector click
+    if (Date.now() - lastConnectorClickTime.current < 150) return;
+
     if (activeTab === 'CONNECTION') {
       if (!id) {
         setSelectedIds([]);
+        setSelectedConnectorId(null);
         return;
       }
       setSelectedIds([id]);
+      setSelectedConnectorId(null); // Deselect connector when clicking a piece
       if (pt) {
         const piece = areas[id];
         if (piece && piece.type === AreaType.PIECE) {
@@ -183,6 +193,11 @@ export default function V3App() {
     setConnectionPathIndex(pathIndex);
   }, []);
 
+  const handleConnectorSelect = useCallback((id: string | null) => {
+    lastConnectorClickTime.current = Date.now();
+    setSelectedConnectorId(id);
+  }, []);
+
   const handleAddConnector = useCallback(() => {
     if (selectedIds.length !== 1) return;
     const pieceId = selectedIds[0];
@@ -195,9 +210,10 @@ export default function V3App() {
       headTemplateId: connectorHeadTemplate,
       headScale: connectorHeadScale,
       headRotationDeg: connectorHeadRotation,
-      headOffset: connectorHeadOffset
+      headOffset: connectorHeadOffset,
+      useEquidistantHeadPoint: useEquidistantHeadPoint
     });
-  }, [selectedIds, connectionT, connectionPathIndex, connectorWidthPx, connectorExtrusion, connectorHeadTemplate, connectorHeadScale, connectorHeadRotation, connectorHeadOffset, addConnector]);
+  }, [selectedIds, connectionT, connectionPathIndex, connectorWidthPx, connectorExtrusion, connectorHeadTemplate, connectorHeadScale, connectorHeadRotation, connectorHeadOffset, useEquidistantHeadPoint, addConnector]);
 
   const fitScale = Math.max(0.1, Math.min(containerSize.w / (width || 800), containerSize.h / (height || 600)) * 0.9);
 
@@ -258,6 +274,8 @@ export default function V3App() {
         setConnectorHeadRotation={setConnectorHeadRotation}
         connectorHeadOffset={connectorHeadOffset}
         setConnectorHeadOffset={setConnectorHeadOffset}
+        useEquidistantHeadPoint={useEquidistantHeadPoint}
+        setUseEquidistantHeadPoint={setUseEquidistantHeadPoint}
         onAddConnector={handleAddConnector}
         selectedConnectorId={selectedConnectorId}
         onRemoveConnector={removeConnector}
@@ -287,8 +305,9 @@ export default function V3App() {
           connectorHeadScale={connectorHeadScale}
           connectorHeadRotation={connectorHeadRotation}
           connectorHeadOffset={connectorHeadOffset}
+          useEquidistantHeadPoint={useEquidistantHeadPoint}
           selectedConnectorId={selectedConnectorId}
-          onConnectorSelect={setSelectedConnectorId}
+          onConnectorSelect={handleConnectorSelect}
           onConnectorUpdate={updateConnector}
         />
       </main>

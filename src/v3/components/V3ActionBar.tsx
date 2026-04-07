@@ -49,6 +49,8 @@ interface V3ActionBarProps {
   setConnectorHeadRotation: (v: number) => void;
   connectorHeadOffset: number;
   setConnectorHeadOffset: (v: number) => void;
+  useEquidistantHeadPoint: boolean;
+  setUseEquidistantHeadPoint: (v: boolean) => void;
   onAddConnector: () => void;
   selectedConnectorId: string | null;
   onRemoveConnector: (id: string) => void;
@@ -115,6 +117,8 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
   setConnectorHeadRotation,
   connectorHeadOffset,
   setConnectorHeadOffset,
+  useEquidistantHeadPoint,
+  setUseEquidistantHeadPoint,
   onAddConnector,
   selectedConnectorId,
   onRemoveConnector,
@@ -352,6 +356,16 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
               <NumberInput value={connectorHeadOffset} onChange={setConnectorHeadOffset} min={-100} max={100} width="w-10" />
             </div>
 
+            <div className="flex items-center gap-2">
+              <Label>Equidistant</Label>
+              <input 
+                type="checkbox" 
+                checked={useEquidistantHeadPoint} 
+                onChange={e => setUseEquidistantHeadPoint(e.target.checked)}
+                className="w-4 h-4 rounded border-slate-200 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+              />
+            </div>
+
             {maxPathIndex > 0 && (
               <div className="flex items-center gap-2">
                 <Label>Path</Label>
@@ -368,7 +382,7 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
             <button
               type="button"
               onClick={onAddConnector}
-              disabled={selectedIds.length !== 1}
+              disabled={selectedIds.length !== 1 || !!selectedConnectorId}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg shrink-0 bg-emerald-600 text-white text-[10px] font-bold uppercase disabled:opacity-30 disabled:cursor-not-allowed hover:bg-emerald-500"
             >
               <Plus className="w-3 h-3" />

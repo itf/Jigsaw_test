@@ -37,7 +37,8 @@ export function generateConnectorPath(
   headTemplateId: string,
   headScale: number,
   headRotationDeg: number,
-  headOffset: number
+  headOffset: number,
+  useEquidistantHeadPoint: boolean = false
 ): { path: paper.PathItem, basePathData: string, headCenter: paper.Point } {
   const children = boundary instanceof paper.CompoundPath 
     ? (boundary.children.filter(c => c instanceof paper.Path) as paper.Path[])
@@ -56,6 +57,7 @@ export function generateConnectorPath(
   
   // 2. Calculate extrusion direction (normal to chord p1-p2)
   const chord = p2.subtract(p1);
+  const chordMidPoint = p1.add(p2).divide(2);
   const midPoint = sourcePath.getPointAt(sourcePath.length * midT);
   const midNormal = sourcePath.getNormalAt(sourcePath.length * midT);
   
@@ -99,8 +101,33 @@ export function generateConnectorPath(
   head.rotate(headRotationDeg, headCenter);
   
   // 3. Find contact points on head
-  const loc1 = head.getNearestLocation(p1);
-  const loc2 = head.getNearestLocation(p2);
+  const headPath = (head instanceof paper.CompoundPath ? head.children[0] : head) as paper.Path;
+  
+  let hMidOffset: number;
+  if (useEquidistantHeadPoint) {
+    // Find intersection of normal ray from chordMidPoint with head boundary
+    const rayLine = new paper.Path.Line(chordMidPoint, chordMidPoint.add(chordNormal.multiply(2000)));
+    const intersections = headPath.getIntersections(rayLine);
+    rayLine.remove();
+    
+    if (intersections.length > 0) {
+      // Sort by distance from chordMidPoint
+      intersections.sort((a, b) => a.point.getDistance(chordMidPoint) - b.point.getDistance(chordMidPoint));
+      hMidOffset = headPath.getOffsetOf(intersections[0].point);
+    } else {
+      hMidOffset = headPath.getNearestLocation(midPoint).offset;
+    }
+  } else {
+    hMidOffset = headPath.getNearestLocation(midPoint).offset;
+  }
+  
+  // We want the neck width on the head to be similar to widthPx
+  // We'll walk along the head boundary from the midpoint
+  const hOffset1 = (hMidOffset - widthPx / 2 + headPath.length) % headPath.length;
+  const hOffset2 = (hMidOffset + widthPx / 2) % headPath.length;
+  
+  const pt1Head = headPath.getPointAt(hOffset1);
+  const pt2Head = headPath.getPointAt(hOffset2);
   
   // 4. Construct neck
   const neck = new paper.Path({ insert: false });
@@ -117,27 +144,23 @@ export function generateConnectorPath(
   const basePathData = baseOnly.pathData;
   baseOnly.remove();
   
-  // Side edge 1: p2 to head contact point 2
-  neck.add(loc2.point);
+  // Side edge 1: p2 to head contact point 1
+  neck.add(pt1Head);
   
   // Top edge (along head boundary)
-  const headPath = (head instanceof paper.CompoundPath ? head.children[0] : head) as paper.Path;
-  const hOffset1 = loc1.offset;
-  const hOffset2 = loc2.offset;
-  
-  let diff = hOffset1 - hOffset2;
+  let diff = hOffset2 - hOffset1;
   if (Math.abs(diff) > headPath.length / 2) {
     diff = diff > 0 ? diff - headPath.length : diff + headPath.length;
   }
   
   for (let i = 1; i < steps; i++) {
-    const offset = hOffset2 + diff * (i / steps);
+    const offset = hOffset1 + diff * (i / steps);
     let wrappedOffset = offset % headPath.length;
     if (wrappedOffset < 0) wrappedOffset += headPath.length;
     neck.add(headPath.getPointAt(wrappedOffset));
   }
   
-  neck.add(loc1.point);
+  neck.add(pt2Head);
   neck.closed = true;
   
   // 5. Combine
