@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo } from 'react';
 import paper from 'paper';
 import { Delaunay } from 'd3-delaunay';
-import { Area, AreaType, Operation, OperationType, PuzzleState, Point } from '../types';
+import { Area, AreaType, Operation, OperationType, PuzzleState, Point, Connector } from '../types';
 import { resetPaperProject } from '../utils/paperUtils';
 import { generateGridPoints, generateHexGridPoints, generateRandomPoints } from '../utils/gridUtils';
 import { getWhimsyTemplatePathData, WhimsyTemplateId } from '../utils/whimsyGallery';
@@ -53,6 +53,7 @@ function pickUniqueColor(neighborColors: Set<string>): string {
 
 export function usePuzzleEngineV3() {
   const [areas, setAreas] = useState<Record<string, Area>>({});
+  const [connectors, setConnectors] = useState<Record<string, Connector>>({});
   const [width, setWidth] = useState(800);
   const [height, setHeight] = useState(600);
   const [rootAreaId, setRootAreaId] = useState<string | null>(null);
@@ -78,6 +79,7 @@ export function usePuzzleEngineV3() {
       }
     };
     setAreas(newAreas);
+    setConnectors({});
     setRootAreaId(id);
     setWidth(w);
     setHeight(h);
@@ -376,12 +378,39 @@ export function usePuzzleEngineV3() {
     setAreas(prev => validateAndCleanState(prev));
   }, []);
 
+  const addConnector = useCallback((connector: Omit<Connector, 'id'>) => {
+    const id = `connector-${Math.random().toString(36).slice(2, 6)}`;
+    setConnectors(prev => ({
+      ...prev,
+      [id]: { ...connector, id }
+    }));
+  }, []);
+
+  const updateConnector = useCallback((id: string, updates: Partial<Connector>) => {
+    setConnectors(prev => {
+      if (!prev[id]) return prev;
+      return {
+        ...prev,
+        [id]: { ...prev[id], ...updates }
+      };
+    });
+  }, []);
+
+  const removeConnector = useCallback((id: string) => {
+    setConnectors(prev => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }, []);
+
   const puzzleState = useMemo(() => ({
     areas,
+    connectors,
     rootAreaId: rootAreaId || '',
     width,
     height
-  }), [areas, rootAreaId, width, height]);
+  }), [areas, connectors, rootAreaId, width, height]);
 
   return {
     puzzleState,
@@ -389,8 +418,11 @@ export function usePuzzleEngineV3() {
     subdivideGrid,
     mergePieces,
     addWhimsy,
+    addConnector,
+    updateConnector,
+    removeConnector,
     validateGrid,
     cleanPuzzle,
-    reset: () => { setAreas({}); setRootAreaId(null); }
+    reset: () => { setAreas({}); setConnectors({}); setRootAreaId(null); }
   };
 }

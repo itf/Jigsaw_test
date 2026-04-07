@@ -100,27 +100,3 @@ export function getClosestLocationOnBoundary(boundary: paper.PathItem, targetPoi
   const t = path.length > 0 ? location.offset / path.length : 0;
   return { t, pathIndex, point: location.point };
 }
-
-/**
- * Finds a neighbor piece by sampling a point slightly outside the current piece's boundary.
- */
-export function findNeighborPiece(
-  areas: Record<string, Area>,
-  currentPieceId: string,
-  point: paper.Point,
-  normal: paper.Point
-): string | null {
-  // Offset slightly along the normal to "look" into the neighbor
-  const testPoint = point.add(normal.multiply(0.5));
-  
-  for (const id in areas) {
-    if (id === currentPieceId) continue;
-    const area = areas[id];
-    if (area.type === AreaType.PIECE) {
-      if (area.boundary.contains(testPoint)) {
-        return id;
-      }
-    }
-  }
-  return null;
-}

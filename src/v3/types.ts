@@ -17,8 +17,22 @@ export interface Area {
   seedPoint?: Point; // Optional, useful for grids
 }
 
+export interface Connector {
+  id: string;
+  pieceId: string;
+  pathIndex: number;
+  midT: number;
+  widthPx: number;
+  extrusion: number;
+  headTemplateId: string;
+  headScale: number;
+  headRotationDeg: number;
+  headOffset: number; // Offset along the neck normal
+}
+
 export interface PuzzleState {
   areas: Record<string, Area>;
+  connectors: Record<string, Connector>;
   rootAreaId: string;
   width: number;
   height: number;

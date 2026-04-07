@@ -1,5 +1,5 @@
 import React from 'react';
-import { Grid, Hexagon, Shuffle, Link as LinkIcon, Download, RefreshCw, Trash2, X, Layers, Merge, Circle, Star, Sparkles } from 'lucide-react';
+import { Grid, Hexagon, Shuffle, Link as LinkIcon, Download, RefreshCw, Trash2, X, Layers, Merge, Circle, Star, Sparkles, Plus } from 'lucide-react';
 import { Tab } from '../../v2/constants';
 
 interface V3ActionBarProps {
@@ -37,6 +37,21 @@ interface V3ActionBarProps {
   connectionPathIndex: number;
   setConnectionPathIndex: (v: number) => void;
   maxPathIndex: number;
+  connectorWidthPx: number;
+  setConnectorWidthPx: (v: number) => void;
+  connectorExtrusion: number;
+  setConnectorExtrusion: (v: number) => void;
+  connectorHeadTemplate: string;
+  setConnectorHeadTemplate: (v: string) => void;
+  connectorHeadScale: number;
+  setConnectorHeadScale: (v: number) => void;
+  connectorHeadRotation: number;
+  setConnectorHeadRotation: (v: number) => void;
+  connectorHeadOffset: number;
+  setConnectorHeadOffset: (v: number) => void;
+  onAddConnector: () => void;
+  selectedConnectorId: string | null;
+  onRemoveConnector: (id: string) => void;
 }
 
 const Label: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -88,6 +103,21 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
   connectionPathIndex,
   setConnectionPathIndex,
   maxPathIndex,
+  connectorWidthPx,
+  setConnectorWidthPx,
+  connectorExtrusion,
+  setConnectorExtrusion,
+  connectorHeadTemplate,
+  setConnectorHeadTemplate,
+  connectorHeadScale,
+  setConnectorHeadScale,
+  connectorHeadRotation,
+  setConnectorHeadRotation,
+  connectorHeadOffset,
+  setConnectorHeadOffset,
+  onAddConnector,
+  selectedConnectorId,
+  onRemoveConnector,
 }) => {
   const canSubdivide = selectedIds.length > 0;
 
@@ -278,28 +308,83 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
                 step="0.001" 
                 value={connectionT} 
                 onChange={e => setConnectionT(Number(e.target.value))}
-                className="w-32 h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-emerald-600"
+                className="w-24 h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-emerald-600"
               />
               <span className="text-[9px] font-mono font-bold text-slate-400 w-8">{connectionT.toFixed(3)}</span>
             </div>
 
+            <div className="flex items-center gap-2">
+              <Label>Width (px)</Label>
+              <NumberInput value={connectorWidthPx} onChange={setConnectorWidthPx} min={4} max={200} width="w-12" />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Label>Extrude</Label>
+              <NumberInput value={connectorExtrusion} onChange={setConnectorExtrusion} min={1} max={200} width="w-10" />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Label>Head</Label>
+              <select
+                value={connectorHeadTemplate}
+                onChange={e => setConnectorHeadTemplate(e.target.value)}
+                className="h-7 px-2 rounded-lg text-[10px] font-bold border border-slate-100 bg-slate-50 text-slate-700 outline-none focus:ring-1 focus:ring-emerald-500"
+              >
+                <option value="circle">Circle</option>
+                <option value="star">Star</option>
+                <option value="square">Square</option>
+                <option value="triangle">Triangle</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Label>Scale</Label>
+              <NumberInput value={connectorHeadScale} onChange={setConnectorHeadScale} min={0.1} max={5} width="w-10" />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Label>Rot°</Label>
+              <NumberInput value={connectorHeadRotation} onChange={setConnectorHeadRotation} min={-360} max={360} width="w-10" />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Label>Offset</Label>
+              <NumberInput value={connectorHeadOffset} onChange={setConnectorHeadOffset} min={-100} max={100} width="w-10" />
+            </div>
+
             {maxPathIndex > 0 && (
               <div className="flex items-center gap-2">
-                <Label>Path Index</Label>
+                <Label>Path</Label>
                 <NumberInput 
                   value={connectionPathIndex} 
                   onChange={setConnectionPathIndex} 
                   min={0} 
                   max={maxPathIndex} 
-                  width="w-10" 
+                  width="w-8" 
                 />
-                <span className="text-[9px] text-slate-400">/ {maxPathIndex}</span>
               </div>
             )}
 
-            <div className="text-[10px] text-slate-400 italic">
-              {selectedIds.length === 1 ? 'Drag slider to move handler' : 'Select a piece to place connector'}
-            </div>
+            <button
+              type="button"
+              onClick={onAddConnector}
+              disabled={selectedIds.length !== 1}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg shrink-0 bg-emerald-600 text-white text-[10px] font-bold uppercase disabled:opacity-30 disabled:cursor-not-allowed hover:bg-emerald-500"
+            >
+              <Plus className="w-3 h-3" />
+              Add
+            </button>
+
+            {selectedConnectorId && (
+              <button
+                type="button"
+                onClick={() => onRemoveConnector(selectedConnectorId)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg shrink-0 bg-rose-600 text-white text-[10px] font-bold uppercase hover:bg-rose-500"
+              >
+                <Trash2 className="w-3 h-3" />
+                Delete
+              </button>
+            )}
           </div>
         )}
 
