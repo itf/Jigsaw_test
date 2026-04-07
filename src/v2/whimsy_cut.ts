@@ -151,7 +151,6 @@ export function buildWhimsyStencilPathData(
  * 2. For each affected piece:
  *    - Calculates the intersection of the stencil with the piece (the "hit" part)
  *    - Calculates the remainder (piece minus stencil)
- * 3. Unifies all hit regions into a single new whimsy piece
  * 4. Updates the area hierarchy to reflect the cuts
  *
  * WHY WE DO THIS:

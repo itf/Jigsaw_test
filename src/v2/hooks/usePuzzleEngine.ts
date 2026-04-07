@@ -217,35 +217,14 @@ export function usePuzzleEngine({
           // Get the shared perimeter between these two pieces
           const shared = getSharedPerimeter(a, b);
           if (shared) {
-            // They touch! Union them in the DSU
+            // They touch — union them in the DSU.
+            // Leave area boundaries untouched; the geometry union is computed downstream
+            // by buildBooleanBasePiecesCore / the hasWhimsy branch using each area's
+            // original (clipped) boundary. Merging boundaries here would bake the full
+            // whimsy stencil circle into la's boundary, leaving internal arcs where the
+            // circle crosses cells that are not part of this merged group.
             union(la, lb);
-            
-            // TEST: Instead of just removing the shared boundary, 
-            // perform a boolean union of the two pieces
-            const pathA = pathItemFromBoundaryData(a.boundary);
-            const pathB = pathItemFromBoundaryData(b.boundary);
-            const unionPath = pathA.unite(pathB);
-            pathA.remove();
-            pathB.remove();
-            
-            if (unionPath) {
-              // Clean up the union result
-              const cleaned = (unionPath as paper.PathItem).reduce({ insert: false }) as paper.PathItem;
-              cleaned.reorient(true, true);
-              
-              // Update both pieces to the unified boundary
-              // (keeping 'a' as the representative)
-              areas[la] = {
-                ...a,
-                boundary: cleaned.pathData
-              };
-              
-              // Remove piece 'b' from areas since it's now merged
-              delete areas[lb];
-              
-              cleaned.remove();
-              shared.remove();
-            }
+            shared.remove();
           }
         });
       });
