@@ -19,6 +19,7 @@ export interface TopoEdge {
   pathData: string; // The geometric path (can be a line, arc, or complex whimsy)
   faceAId: string;
   faceBId: string | null; // null if it's a boundary edge
+  isMerged: boolean; // If true, this edge is "internal" to a merged group
   connectors?: { u: number; stampPathData: string; isFlipped: boolean; ownerFaceId: string }[];
 }
 
@@ -196,7 +197,7 @@ export class TopologicalEngine {
           pathData: fe.pathData,
           faceAId: fe.faceId,
           faceBId: null,
-
+          isMerged: false
         };
         edgeMap.set(edgeKey, edge);
       }
@@ -435,40 +436,26 @@ export class TopologicalEngine {
    * Merges two faces by marking their shared edges as "merged".
    */
   /**
-   * Merges two adjacent faces by marking their shared edges as "merged".
-   * 
-   * How it works:
-   * 1. Scans all edges in the topological graph
-   * 2. Finds edges whose faceAId and faceBId match the two faces (in either order)
-   * 3. Marks those shared edges with isMerged = true
-   * 4. Later, when getMergedBoundary() is called, merged edges are excluded from the
-   *    boundary trace, so they won't appear in the final cut contour
-   * 
-   * This is used during topological cut generation: shared edges between merged pieces
-   * are not traced, so the pieces form a single continuous boundary.
+   * Merges two adjacent faces into one.
+   * The shared edge between them is marked as merged and will be ignored
+   * during boundary generation.
    */
-  mergeFaces(_faceAId: string, _faceBId: string) {
-    // No-op: boundary computation uses XOR logic in getMergedBoundary, not isMerged flags.
+  mergeFaces(faceAId: string, faceBId: string) {
+    this.edges.forEach(edge => {
+      if ((edge.faceAId === faceAId && edge.faceBId === faceBId) ||
+          (edge.faceAId === faceBId && edge.faceBId === faceAId)) {
+        edge.isMerged = true;
+      }
+    });
   }
 
   /**
+   * Returns the boundary path for a group of merged faces.
+   * This is the "Traversal" step.
+   */
+  /**
    * Generates the final SVG boundary path for a set of merged faces.
-   * 
-   * This is the core "Traversal" step for merged group boundaries. Given a set of face IDs
-   * that have been merged, it reconstructs the outer perimeter by:
-   * 
-   * 1. Finding all edges that touch at least one face in the group
-   * 2. Filtering to only "boundary edges" — edges where exactly one side is in the group
-   *    (Internal edges where both sides are in the group are omitted)
-   * 3. Building an adjacency map of vertices on the boundary
-   * 4. Walking the boundary edges in order, starting from an arbitrary edge
-   * 5. Traversing counterclockwise (so that when multiple loops exist, they form a
-   *    valid SVG path with holes)
-   * 6. Splicing in any connector stamps that are attached to the boundary
-   * 7. Combining all loops into a single SVG path string
-   * 
-   * The result is the outer cut contour of all merged pieces as a single unified shape.
-   * Example: Three merged pieces might have a combined boundary that is non-convex or has holes.
+   * It traverses the outer boundary of the group, splicing in any connectors.
    */
   getMergedBoundary(faceIds: string[]): string {
     const faceIdSet = new Set(faceIds);
@@ -478,18 +465,12 @@ export class TopologicalEngine {
       if (face) face.edgeIds.forEach(eid => groupEdges.add(eid));
     });
 
-    /**
-     * Boundary edge selection:
-     * An edge belongs to the boundary if exactly one of its two faces is in the merged group.
-     * - Both faces in group: internal edge, not included in boundary trace
-     * - One face in group, one outside: boundary edge, should be traced
-     * - No faces in group: not relevant, already filtered
-     */
+    // An edge is on the boundary if exactly one of its faces is in the group
     const boundaryEdges = Array.from(groupEdges).filter(eid => {
       const edge = this.edges.get(eid)!;
       const faceAIn = faceIdSet.has(edge.faceAId);
       const faceBIn = edge.faceBId ? faceIdSet.has(edge.faceBId) : false;
-      return faceAIn !== faceBIn;  // XOR: exactly one side is in the group
+      return faceAIn !== faceBIn;
     });
 
     if (boundaryEdges.length === 0) return '';
@@ -589,95 +570,59 @@ export class TopologicalEngine {
 
   /**
    * Gets the path for an edge, optionally reversed, and with connectors applied.
-   *
-   * Each connector stamp is an open curve whose two endpoints attach to the shared
-   * edge.  The correct splice is:
-   *   [edge from start → stamp_endpoint_0] + [stamp arc] + [stamp_endpoint_1 → edge end]
-   *
-   * The attachment offsets are found by projecting the stamp's first/last points back
-   * onto the original edge path via getNearestLocation.  The edge is then sampled as
-   * a polyline between those attachment points, avoiding the "shortcut gap" that
-   * occurred when the old code jumped from edge-start directly to the stamp.
    */
   private getEdgePath(edgeId: string, reversed: boolean): paper.Path {
     const edge = this.edges.get(edgeId)!;
-
+    
     if (!edge.connectors || edge.connectors.length === 0) {
       const path = new paper.Path(edge.pathData);
       if (reversed) path.reverse();
       return path;
     }
 
+    // Sort connectors by position along the edge
     const sorted = [...edge.connectors].sort((a, b) => a.u - b.u);
+    
+    // We'll build a new path by splicing connectors into the original edge
     const edgePath = new paper.Path(edge.pathData);
     const totalLen = edgePath.length;
-
-    // For each connector: position the stamp and record the edge offsets of its two
-    // attachment endpoints.
-    type Entry = { off0: number; off1: number; stamp: paper.Path };
-    const entries: Entry[] = sorted.map(c => {
-      const offset = Math.max(0, Math.min(totalLen, c.u * totalLen));
-      const pos     = edgePath.getPointAt(offset);
-      const tangent = edgePath.getTangentAt(offset);
-      const angle   = tangent.angle;
-
-      const stamp = new paper.Path(c.stampPathData);
-      const side  = (c.ownerFaceId === edge.faceAId) ? -1 : 1;
-      stamp.rotate(angle - 90 * side, new paper.Point(0, 0));
-      stamp.translate(pos);
-      stamp.closed = false;
-
-      // Project stamp endpoints back onto the edge to get attachment offsets.
-      const loc0 = edgePath.getNearestLocation(stamp.firstSegment.point);
-      const loc1 = edgePath.getNearestLocation(stamp.lastSegment.point);
-      let off0 = loc0.offset;
-      let off1 = loc1.offset;
-
-      // Ensure stamp runs in the same direction as the edge (off0 < off1).
-      if (off0 > off1) {
-        stamp.reverse();
-        [off0, off1] = [off1, off0];
-      }
-
-      return { off0, off1, stamp };
-    });
-
-    // Sample the edge as a polyline between connector attachment points, inserting
-    // each stamp curve at its splice region.
-    const SAMPLE_STEP = 4; // pixels between sample points on the straight edge portions
-
-    function sampleEdge(fromOff: number, toOff: number): paper.Point[] {
-      const pts: paper.Point[] = [];
-      if (toOff <= fromOff) return pts;
-      const n = Math.max(1, Math.round((toOff - fromOff) / SAMPLE_STEP));
-      for (let i = 0; i <= n; i++) {
-        const t = fromOff + (toOff - fromOff) * (i / n);
-        const pt = edgePath.getPointAt(Math.max(0, Math.min(totalLen, t)));
-        if (pt) pts.push(pt);
-      }
-      return pts;
-    }
-
+    
     const newPath = new paper.Path();
-    let cursor = 0;
-
-    for (const { off0, off1, stamp } of entries) {
-      // Edge section before this stamp.
-      const edgeSeg = sampleEdge(cursor, off0);
-      for (const pt of edgeSeg) newPath.add(pt);
-
-      // Stamp arc.
-      newPath.addSegments(stamp.segments.map((s: paper.Segment) => s.clone()));
+    newPath.add(edgePath.firstSegment.point.clone());
+    
+    sorted.forEach(c => {
+      const offset = c.u * totalLen;
+      const pos = edgePath.getPointAt(offset);
+      const tangent = edgePath.getTangentAt(offset);
+      const angle = tangent.angle;
+      
+      const stamp = new paper.Path(c.stampPathData);
+      
+      // Convention: raw stamp points RIGHT (0 degrees)
+      // side = 1 means point into A (-90 relative to tangent)
+      // side = -1 means point into B (+90 relative to tangent)
+      let side = (c.ownerFaceId === edge.faceAId) ? -1 : 1;
+      
+      const rotation = angle - 90 * side;
+      stamp.rotate(rotation, new paper.Point(0, 0));
+      stamp.translate(pos);
+      
+      stamp.closed = false;
+      
+      const d1 = stamp.firstSegment.point.getDistance(newPath.lastSegment.point);
+      const d2 = stamp.lastSegment.point.getDistance(newPath.lastSegment.point);
+      
+      if (d2 < d1) {
+        stamp.reverse();
+      }
+      
+      newPath.addSegments(stamp.segments.map(s => s.clone()));
       stamp.remove();
-
-      cursor = off1;
-    }
-
-    // Remaining edge after the last stamp.
-    const tail = sampleEdge(cursor, totalLen);
-    for (const pt of tail) newPath.add(pt);
-
+    });
+    
+    newPath.add(edgePath.lastSegment.point.clone());
     edgePath.remove();
+    
     if (reversed) newPath.reverse();
     return newPath;
   }

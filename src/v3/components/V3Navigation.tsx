@@ -1,13 +1,13 @@
 import React from 'react';
 import { Move, Layers, Link as LinkIcon, Zap, Type, Download } from 'lucide-react';
-import { Tab } from '../constants';
+import { Tab } from '../../v2/constants';
 
-interface V2NavigationProps {
+interface V3NavigationProps {
   activeTab: Tab;
   setActiveTab: (tab: Tab) => void;
 }
 
-export const V2Navigation: React.FC<V2NavigationProps> = ({ activeTab, setActiveTab }) => {
+export const V3Navigation: React.FC<V3NavigationProps> = ({ activeTab, setActiveTab }) => {
   const tabs = [
     { id: 'TOPOLOGY', icon: Move, label: 'Topology' },
     { id: 'MODIFICATION', icon: Layers, label: 'Modification' },

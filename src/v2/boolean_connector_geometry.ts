@@ -2,6 +2,7 @@ import paper from 'paper';
 import { Area, Connector } from './types';
 import { pathItemFromBoundaryData, resetPaperProject } from './paperProject';
 import {
+  getSharedPerimeter,
   getPointAtU,
   createConnectorStamp,
   connectorOwnerNeighborLeafIds,
@@ -189,12 +190,8 @@ function applyBooleanConnectorStampsToPiecesCore(
     });
 
     if (piecePath) {
-      const empty = new paper.Path();
-      const united = piecePath.unite(empty) as paper.PathItem;
-      empty.remove();
+      pieces.push({ id: piece.id, pathData: piecePath.pathData, color: piece.color });
       piecePath.remove();
-      pieces.push({ id: piece.id, pathData: united.pathData, color: piece.color });
-      united.remove();
     } else {
       pieces.push(piece);
     }

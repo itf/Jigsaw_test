@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import V1App from './v1/App.tsx';
 import V2App from './v2/App.tsx';
+import V3App from './v3/App.tsx';
 import { motion, AnimatePresence } from 'motion/react';
-import { Scissors, Layers, Zap, ChevronRight, Info } from 'lucide-react';
+import { Scissors, Layers, Zap, ChevronRight, Info, Sparkles } from 'lucide-react';
 
 export default function App() {
-  const [version, setVersion] = useState<'HOME' | 'V1' | 'V2'>('HOME');
+  const [version, setVersion] = useState<'HOME' | 'V1' | 'V2' | 'V3'>('HOME');
 
   if (version === 'V1') {
     return (
@@ -37,6 +38,21 @@ export default function App() {
     );
   }
 
+  if (version === 'V3') {
+    return (
+      <div className="relative w-full h-screen">
+        <button 
+          onClick={() => setVersion('HOME')}
+          className="absolute top-4 left-4 z-[100] bg-white/80 backdrop-blur-sm p-2 rounded-full shadow-lg hover:bg-white transition-colors"
+          title="Back to Home"
+        >
+          <ChevronRight className="w-5 h-5 rotate-180" />
+        </button>
+        <V3App />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 font-sans">
       <motion.div 
@@ -54,7 +70,7 @@ export default function App() {
           </p>
         </header>
 
-        <div className="grid md:grid-cols-2 gap-8">
+        <div className="grid md:grid-cols-3 gap-8">
           {/* V1 Card */}
           <motion.button
             whileHover={{ scale: 1.02, y: -4 }}
@@ -96,6 +112,28 @@ export default function App() {
             </p>
             <div className="flex items-center text-indigo-400 font-semibold group-hover:translate-x-1 transition-transform">
               Explore V2 <ChevronRight className="w-4 h-4 ml-1" />
+            </div>
+          </motion.button>
+
+          {/* V3 Card */}
+          <motion.button
+            whileHover={{ scale: 1.02, y: -4 }}
+            whileTap={{ scale: 0.98 }}
+            onClick={() => setVersion('V3')}
+            className="group relative bg-indigo-600 p-8 rounded-3xl shadow-xl shadow-indigo-200 text-left transition-all hover:shadow-2xl hover:shadow-indigo-300"
+          >
+            <div className="flex items-start justify-between mb-6">
+              <div className="p-3 bg-white/20 rounded-xl text-white group-hover:bg-white group-hover:text-indigo-600 transition-colors">
+                <Sparkles className="w-6 h-6" />
+              </div>
+              <span className="px-3 py-1 bg-white/20 text-white text-xs font-bold rounded-full uppercase tracking-wider">New</span>
+            </div>
+            <h3 className="text-2xl font-bold text-white mb-2">Simplified Engine</h3>
+            <p className="text-indigo-100 mb-6 leading-relaxed">
+              V3 focuses on a streamlined architecture. Direct Paper.js boolean operations for merging and whimsies. Clean, robust, and easy to extend.
+            </p>
+            <div className="flex items-center text-white font-semibold group-hover:translate-x-1 transition-transform">
+              Start V3 <ChevronRight className="w-4 h-4 ml-1" />
             </div>
           </motion.button>
         </div>
