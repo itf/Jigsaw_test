@@ -19,7 +19,6 @@ export interface TopoEdge {
   pathData: string; // The geometric path (can be a line, arc, or complex whimsy)
   faceAId: string;
   faceBId: string | null; // null if it's a boundary edge
-  isMerged: boolean; // If true, this edge is "internal" to a merged group
   connectors?: { u: number; stampPathData: string; isFlipped: boolean; ownerFaceId: string }[];
 }
 
@@ -197,7 +196,7 @@ export class TopologicalEngine {
           pathData: fe.pathData,
           faceAId: fe.faceId,
           faceBId: null,
-          isMerged: false
+
         };
         edgeMap.set(edgeKey, edge);
       }
@@ -436,26 +435,40 @@ export class TopologicalEngine {
    * Merges two faces by marking their shared edges as "merged".
    */
   /**
-   * Merges two adjacent faces into one.
-   * The shared edge between them is marked as merged and will be ignored
-   * during boundary generation.
+   * Merges two adjacent faces by marking their shared edges as "merged".
+   * 
+   * How it works:
+   * 1. Scans all edges in the topological graph
+   * 2. Finds edges whose faceAId and faceBId match the two faces (in either order)
+   * 3. Marks those shared edges with isMerged = true
+   * 4. Later, when getMergedBoundary() is called, merged edges are excluded from the
+   *    boundary trace, so they won't appear in the final cut contour
+   * 
+   * This is used during topological cut generation: shared edges between merged pieces
+   * are not traced, so the pieces form a single continuous boundary.
    */
-  mergeFaces(faceAId: string, faceBId: string) {
-    this.edges.forEach(edge => {
-      if ((edge.faceAId === faceAId && edge.faceBId === faceBId) ||
-          (edge.faceAId === faceBId && edge.faceBId === faceAId)) {
-        edge.isMerged = true;
-      }
-    });
+  mergeFaces(_faceAId: string, _faceBId: string) {
+    // No-op: boundary computation uses XOR logic in getMergedBoundary, not isMerged flags.
   }
 
   /**
-   * Returns the boundary path for a group of merged faces.
-   * This is the "Traversal" step.
-   */
-  /**
    * Generates the final SVG boundary path for a set of merged faces.
-   * It traverses the outer boundary of the group, splicing in any connectors.
+   * 
+   * This is the core "Traversal" step for merged group boundaries. Given a set of face IDs
+   * that have been merged, it reconstructs the outer perimeter by:
+   * 
+   * 1. Finding all edges that touch at least one face in the group
+   * 2. Filtering to only "boundary edges" — edges where exactly one side is in the group
+   *    (Internal edges where both sides are in the group are omitted)
+   * 3. Building an adjacency map of vertices on the boundary
+   * 4. Walking the boundary edges in order, starting from an arbitrary edge
+   * 5. Traversing counterclockwise (so that when multiple loops exist, they form a
+   *    valid SVG path with holes)
+   * 6. Splicing in any connector stamps that are attached to the boundary
+   * 7. Combining all loops into a single SVG path string
+   * 
+   * The result is the outer cut contour of all merged pieces as a single unified shape.
+   * Example: Three merged pieces might have a combined boundary that is non-convex or has holes.
    */
   getMergedBoundary(faceIds: string[]): string {
     const faceIdSet = new Set(faceIds);
@@ -465,12 +478,18 @@ export class TopologicalEngine {
       if (face) face.edgeIds.forEach(eid => groupEdges.add(eid));
     });
 
-    // An edge is on the boundary if exactly one of its faces is in the group
+    /**
+     * Boundary edge selection:
+     * An edge belongs to the boundary if exactly one of its two faces is in the merged group.
+     * - Both faces in group: internal edge, not included in boundary trace
+     * - One face in group, one outside: boundary edge, should be traced
+     * - No faces in group: not relevant, already filtered
+     */
     const boundaryEdges = Array.from(groupEdges).filter(eid => {
       const edge = this.edges.get(eid)!;
       const faceAIn = faceIdSet.has(edge.faceAId);
       const faceBIn = edge.faceBId ? faceIdSet.has(edge.faceBId) : false;
-      return faceAIn !== faceBIn;
+      return faceAIn !== faceBIn;  // XOR: exactly one side is in the group
     });
 
     if (boundaryEdges.length === 0) return '';

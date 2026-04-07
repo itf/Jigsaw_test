@@ -376,7 +376,15 @@ function splitPathAtPoints(path: paper.Path, points: paper.Point[], tol: number)
 export function getSharedPerimeter(areaA: Area, areaB: Area): paper.PathItem | null {
   const topA = pathItemFromBoundaryData(areaA.boundary);
   const topB = pathItemFromBoundaryData(areaB.boundary);
-  
+  const answ = topA.intersect(topB);
+  answ.remove();
+  // topA.remove();
+  // topB.remove();
+  // if (!answ || (answ as any).length < 0.05) {
+  //   answ?.remove();
+  //   return null;
+  // }
+  // return answ;
   if (!topA || !topB) {
     topA?.remove();
     topB?.remove();

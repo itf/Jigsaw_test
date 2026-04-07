@@ -1,5 +1,5 @@
 import React from 'react';
-import { Move, Layers, Link as LinkIcon, Zap, Type, Download } from 'lucide-react';
+import { Move, Layers, Link as LinkIcon, Zap, Type, Download, Clock } from 'lucide-react';
 import { Tab } from '../constants';
 
 interface V2NavigationProps {
@@ -15,6 +15,7 @@ export const V2Navigation: React.FC<V2NavigationProps> = ({ activeTab, setActive
     { id: 'RESOLUTION', icon: Zap, label: 'Resolution' },
     { id: 'TRANSFORMATION', icon: Type, label: 'Transformation' },
     { id: 'PRODUCTION', icon: Download, label: 'Production' },
+    { id: 'HISTORY', icon: Clock, label: 'History' },
   ];
 
   return (

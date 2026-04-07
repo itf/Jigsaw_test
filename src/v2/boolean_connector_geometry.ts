@@ -189,8 +189,12 @@ function applyBooleanConnectorStampsToPiecesCore(
     });
 
     if (piecePath) {
-      pieces.push({ id: piece.id, pathData: piecePath.pathData, color: piece.color });
+      const empty = new paper.Path();
+      const united = piecePath.unite(empty) as paper.PathItem;
+      empty.remove();
       piecePath.remove();
+      pieces.push({ id: piece.id, pathData: united.pathData, color: piece.color });
+      united.remove();
     } else {
       pieces.push(piece);
     }

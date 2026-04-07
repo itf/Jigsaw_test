@@ -22,7 +22,7 @@ interface V2CanvasProps {
   connectorOverlays?: ConnectorOverlay[];
   selectedId: string | null;
   mergePickIds: string[];
-  sharedEdges: { id: string; areaAId: string; areaBId: string; pathData: string; isMerged: boolean }[];
+  sharedEdges: { id: string; areaAId: string; areaBId: string; pathData: string }[];
   resolvedConnectors: Connector[];
   topology: Record<string, Area>;
   setHoveredId: (id: string | null) => void;
@@ -408,11 +408,11 @@ export const V2Canvas: React.FC<V2CanvasProps> = ({
                   key={edge.id}
                   d={edge.pathData}
                   fill="none"
-                  stroke={edge.isMerged ? 'none' : selectedId === edge.id ? '#6366f1' : '#000'}
+                  stroke={selectedId === edge.id ? '#6366f1' : '#000'}
                   strokeWidth={selectedId === edge.id ? '3' : '1'}
                   strokeLinecap="round"
                   style={{
-                    opacity: edge.isMerged ? 0 : activeTab === 'CONNECTION' ? 0.8 : 0.2,
+                    opacity: activeTab === 'CONNECTION' ? 0.8 : 0.2,
                     pointerEvents: activeTab === 'CONNECTION' ? 'all' : 'none',
                     cursor: activeTab === 'CONNECTION' ? 'crosshair' : undefined,
                   }}

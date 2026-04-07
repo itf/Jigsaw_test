@@ -14,6 +14,7 @@ import { V2ActionBar } from './components/V2ActionBar';
 import { V2Canvas } from './components/V2Canvas';
 import { V2CreateModal } from './components/V2CreateModal';
 import { V2TestResults } from './components/V2TestResults';
+import { V2HistoryPanel } from './components/V2HistoryPanel';
 import { Tab, COLORS } from './constants';
 import { runTopologicalTests, TestResult } from './utils/tests';
 
@@ -144,6 +145,22 @@ export default function V2App() {
   }, [width, height, finalPieces]);
 
   // --- Actions ---
+  /**
+   * mergeAreas creates a MERGE operation that combines two pieces or groups.
+   * The actual merging is processed asynchronously in usePuzzleEngine via a Disjoint Set Union (DSU).
+   * When applied, the shared edges between the two areas are deleted, making them a single piece.
+   * 
+   * How it works:
+   * 1. Creates an Operation of type 'MERGE' with areaAId and areaBId as parameters
+   * 2. Adds the operation to the history
+   * 3. usePuzzleEngine processes this operation in its topologyKey memoization:
+   *    - Finds all leaf descendants of both areas
+   *    - Uses DSU (Disjoint Set Union) to union all leaf pairs between the groups
+   *    - For each leaf pair, calculates their shared perimeter using getSharedPerimeter()
+   *    - If they share geometry, unions them in DSU and deletes the shared boundary
+   * 4. The result is that all pieces in the merged group are now in the same DSU component
+   * 5. During topology reconstruction, leaves with the same DSU root are grouped together
+   */
   const mergeAreas = useCallback((areaAId: string, areaBId: string) => {
     const op: Operation = {
       id: `merge-${Date.now()}`,
@@ -326,11 +343,18 @@ export default function V2App() {
   }, [mergePickIds, topology, splitPattern, buildSubdivideOperation]);
 
   const mergeSelectedPieces = useCallback(() => {
+    // Only proceed if at least 2 pieces are selected
     if (mergePickIds.length < 2) return;
+    
+    // Merge all selected pieces together by chaining MERGE operations
+    // Start with the first piece and merge each subsequent piece into it
+    // This creates a chain of bilateral merges: [A, B, C] becomes (A⟷B), then (result⟷C)
     let acc = mergePickIds[0];
     for (let i = 1; i < mergePickIds.length; i++) {
       mergeAreas(acc, mergePickIds[i]);
     }
+    
+    // Clear the selection UI after merging
     setMergePickIds([]);
     setSelectedId(null);
     setSelectedType('NONE');
@@ -506,40 +530,45 @@ export default function V2App() {
       />
 
       <main className="flex-1 relative overflow-hidden flex flex-col" ref={containerRef}>
-        <V2Canvas
-          width={width}
-          height={height}
-          fitScale={scale}
-          isMobile={isMobile}
-          activeTab={activeTab}
-          displayPieces={canvasPieces}
-          connectorOverlays={canvasConnectorOverlays}
-          selectedId={selectedId}
-          mergePickIds={mergePickIds}
-          sharedEdges={sharedEdges}
-          resolvedConnectors={resolvedConnectors}
-          topology={topology}
-          setHoveredId={setHoveredId}
-          setHoveredType={setHoveredType}
-          handleAreaClick={handleAreaClick}
-          addConnector={addConnector}
-          setSelectedId={setSelectedId}
-          setSelectedType={setSelectedType}
-          longPressProps={longPressProps}
-          whimsyPlacementActive={whimsyPlacementActive && activeTab === 'TOPOLOGY'}
-          whimsyPreviewPathData={whimsyPlacementActive && activeTab === 'TOPOLOGY' ? whimsyPreviewPathData : null}
-          onWhimsyBoardPointerMove={setWhimsyPreviewCenter}
-          onWhimsyCommit={commitWhimsyAt}
-          onBackgroundClick={() => {
-            if (activeTab === 'TOPOLOGY') {
-              setMergePickIds([]);
-              setSelectedId(null);
-              setSelectedType('NONE');
-            }
-          }}
-        />
-
-        <V2TestResults testResults={testResults} onClose={() => setTestResults([])} />
+        {activeTab === 'HISTORY' ? (
+          <V2HistoryPanel history={history} width={width} height={height} />
+        ) : (
+          <>
+            <V2Canvas
+              width={width}
+              height={height}
+              fitScale={scale}
+              isMobile={isMobile}
+              activeTab={activeTab}
+              displayPieces={canvasPieces}
+              connectorOverlays={canvasConnectorOverlays}
+              selectedId={selectedId}
+              mergePickIds={mergePickIds}
+              sharedEdges={sharedEdges}
+              resolvedConnectors={resolvedConnectors}
+              topology={topology}
+              setHoveredId={setHoveredId}
+              setHoveredType={setHoveredType}
+              handleAreaClick={handleAreaClick}
+              addConnector={addConnector}
+              setSelectedId={setSelectedId}
+              setSelectedType={setSelectedType}
+              longPressProps={longPressProps}
+              whimsyPlacementActive={whimsyPlacementActive && activeTab === 'TOPOLOGY'}
+              whimsyPreviewPathData={whimsyPlacementActive && activeTab === 'TOPOLOGY' ? whimsyPreviewPathData : null}
+              onWhimsyBoardPointerMove={setWhimsyPreviewCenter}
+              onWhimsyCommit={commitWhimsyAt}
+              onBackgroundClick={() => {
+                if (activeTab === 'TOPOLOGY') {
+                  setMergePickIds([]);
+                  setSelectedId(null);
+                  setSelectedType('NONE');
+                }
+              }}
+            />
+            <V2TestResults testResults={testResults} onClose={() => setTestResults([])} />
+          </>
+        )}
       </main>
     </div>
   );

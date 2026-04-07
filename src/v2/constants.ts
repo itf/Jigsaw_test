@@ -4,4 +4,4 @@ export const COLORS = [
   '#a78bfa', '#c084fc', '#e879f9', '#f472b6', '#fb7185'
 ];
 
-export type Tab = 'TOPOLOGY' | 'MODIFICATION' | 'CONNECTION' | 'RESOLUTION' | 'TRANSFORMATION' | 'PRODUCTION';
+export type Tab = 'TOPOLOGY' | 'MODIFICATION' | 'CONNECTION' | 'RESOLUTION' | 'TRANSFORMATION' | 'PRODUCTION' | 'HISTORY';

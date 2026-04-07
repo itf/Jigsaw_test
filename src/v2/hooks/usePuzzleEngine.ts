@@ -91,7 +91,7 @@ export interface PuzzleEngineResult {
   mergedGroups: Record<string, string[]>;
   /** Messages from ADD_WHIMSY (small fragments, failed placement). */
   whimsyWarnings: string[];
-  sharedEdges: { id: string; areaAId: string; areaBId: string; pathData: string; isMerged: boolean }[];
+  sharedEdges: { id: string; areaAId: string; areaBId: string; pathData: string }[];
   connectors: Connector[];
   resolvedConnectors: Connector[];
   /** Cut geometry: full booleans (union on owner) — use for Production / laser export. */
@@ -134,18 +134,37 @@ export function usePuzzleEngine({
     resetPaperProject(width, height);
     const whimsyWarnings: string[] = [];
 
+    /**
+     * Disjoint Set Union (DSU) data structure for tracking piece grouping.
+     * Each piece (leaf area) has a root in the DSU. Pieces with the same root are merged together.
+     * Initially each piece is its own root; when two pieces merge, their roots are unified.
+     */
     const dsu: Record<string, string> = {};
+    
+    /**
+     * DSU find with path compression: returns the root representative of a piece.
+     * All pieces in a merged group will have the same root after all MERGE operations are applied.
+     */
     const find = (id: string): string => {
       if (!dsu[id]) dsu[id] = id;
       if (dsu[id] === id) return id;
       return dsu[id] = find(dsu[id]);
     };
+    
+    /**
+     * DSU union: connects the root of id1 to the root of id2.
+     * After union, find(id1) and find(id2) return the same root.
+     */
     const union = (id1: string, id2: string) => {
       const r1 = find(id1);
       const r2 = find(id2);
       if (r1 !== r2) dsu[r1] = r2;
     };
 
+    /**
+     * Recursively collects all leaf pieces (isPiece=true) that are descendants of a given area.
+     * Used to find all the actual cuttable pieces within a potentially compound area.
+     */
     const getLeafDescendants = (id: string): string[] => {
       const area = areas[id];
       if (!area) return [];
@@ -153,33 +172,90 @@ export function usePuzzleEngine({
       return area.children.flatMap(childId => getLeafDescendants(childId));
     };
 
+    /**
+     * applyMerge processes a single MERGE operation.
+     * 
+     * Steps:
+     * 1. Extract the two areas to merge (areaAId, areaBId) from the operation
+     * 2. Resolve their descendants: 
+     *    - leavesA/B: all leaf pieces directly under the area
+     *    - groupA/B: all leaf pieces that are already in the same DSU component as the area
+     * 3. For each pair of leaves (la in allA, lb in allB):
+     *    - Check if they share a perimeter using getSharedPerimeter()
+     *    - If they do, union their DSU roots so they become part of the same group
+     *    - Delete the shared boundary geometry
+     * 4. Result: all pieces in allA and allB are now in the same DSU component
+     */
     const applyMerge = (op: Operation) => {
       if (op.type !== 'MERGE') return;
       const { areaAId, areaBId } = op.params;
       const leafAreas = (Object.values(areas) as Area[]).filter(a => a.isPiece);
+      
+      // Get all direct leaf descendants of the two input areas
       const leavesA = getLeafDescendants(areaAId);
       const leavesB = getLeafDescendants(areaBId);
+      
+      // Find the DSU roots of the two areas
       const rootA = find(areaAId);
       const rootB = find(areaBId);
+      
+      // Find all leaves already grouped with each area via previous merges
       const groupA = leafAreas.filter(a => find(a.id) === rootA).map(a => a.id);
       const groupB = leafAreas.filter(a => find(a.id) === rootB).map(a => a.id);
+      
+      // Combine descendants and already-grouped pieces (deduped)
       const allA = Array.from(new Set([...leavesA, ...groupA]));
       const allB = Array.from(new Set([...leavesB, ...groupB]));
 
+      // Try to merge each pair of pieces from the two groups
       allA.forEach(la => {
         allB.forEach(lb => {
           const a = areas[la];
           const b = areas[lb];
           if (!a || !b) return;
+          
+          // Get the shared perimeter between these two pieces
           const shared = getSharedPerimeter(a, b);
           if (shared) {
+            // They touch! Union them in the DSU
             union(la, lb);
-            shared.remove();
+            
+            // TEST: Instead of just removing the shared boundary, 
+            // perform a boolean union of the two pieces
+            const pathA = pathItemFromBoundaryData(a.boundary);
+            const pathB = pathItemFromBoundaryData(b.boundary);
+            const unionPath = pathA.unite(pathB);
+            pathA.remove();
+            pathB.remove();
+            
+            if (unionPath) {
+              // Clean up the union result
+              const cleaned = (unionPath as paper.PathItem).reduce({ insert: false }) as paper.PathItem;
+              cleaned.reorient(true, true);
+              
+              // Update both pieces to the unified boundary
+              // (keeping 'a' as the representative)
+              areas[la] = {
+                ...a,
+                boundary: cleaned.pathData
+              };
+              
+              // Remove piece 'b' from areas since it's now merged
+              delete areas[lb];
+              
+              cleaned.remove();
+              shared.remove();
+            }
           }
         });
       });
     };
 
+    /**
+     * Filter history to only topology-affecting operations that require recomputation.
+     * MERGE, SUBDIVIDE, and ADD_WHIMSY all change the piece structure.
+     * ADD_CONNECTOR and other operations don't require replaying this expensive computation.
+     */
     const topologyOps = history.filter(
       op => op.type === 'MERGE' || op.type === 'SUBDIVIDE' || op.type === 'ADD_WHIMSY'
     );
@@ -255,6 +331,26 @@ export function usePuzzleEngine({
       }
     });
 
+    /**
+     * Build the final mergedGroups map from the DSU state.
+     * 
+     * At this point, the DSU contains the grouping information for all pieces.
+     * All pieces with the same DSU root should be considered a single merged entity.
+     * 
+     * Steps:
+     * 1. Get all leaf pieces (isPiece=true) from the topology
+     * 2. For each leaf, find its DSU root
+     * 3. Group all leaves that share the same root
+     * 4. The resulting map has root IDs as keys and arrays of piece IDs as values
+     * 
+     * Example: If pieces [A, B, C] have been merged, they all share one root:
+     * mergedGroups = { <root>: [A, B, C] }
+     * 
+     * This structure is used by:
+     * - UI to highlight merged pieces with same color
+     * - Geometry engine to compute merged piece boundaries
+     * - Subdivision to determine which leaves to subdivide together
+     */
     const leafAreas = (Object.values(areas) as Area[]).filter(a => a.isPiece);
     const groups: Record<string, string[]> = {};
     leafAreas.forEach(a => {
@@ -268,9 +364,23 @@ export function usePuzzleEngine({
   }, [baseAreas, topologyKey, width, height]);
 
     // 4. Shared Edges: For visualization and connector placement
+    /**
+     * Computes shared edges between pieces, used for visualization and connector placement.
+     * 
+     * This includes both:
+     * - Normal shared edges: between two distinct pieces
+     * - Merged edges: marked as isMerged=true when both pieces are in the same merged group
+     * 
+     * The isMerged flag is used by the UI to:
+     * - Render merged edges differently (e.g., dotted or faded)
+     * - Prevent connector placement on merged (internal) edges
+     * 
+     * For each pair of adjacent pieces, all shared perimeters are combined via boolean union
+     * so that even complex shared boundaries (from whimsy cuts) are represented as a single edge.
+     */
     const sharedEdges = useMemo(() => {
       const leafAreas = (Object.values(topology) as Area[]).filter(a => a.isPiece);
-      const edges: { id: string; areaAId: string; areaBId: string; pathData: string; isMerged: boolean }[] = [];
+      const edges: { id: string; areaAId: string; areaBId: string; pathData: string }[] = [];
 
       if (leafAreas.length > 200) return [];
 
@@ -278,6 +388,11 @@ export function usePuzzleEngine({
 
       const whimsyAreas = leafAreas.filter(a => a.type === AreaType.WHIMSY);
 
+      /**
+       * Looks up which merged group a piece belongs to.
+       * Returns the group's representative ID (root of DSU) if merged,
+       * or the piece's own ID if it's not merged with anything.
+       */
       const getGroupId = (areaId: string) => {
         for (const [groupId, ids] of Object.entries(mergedGroups as Record<string, string[]>)) {
           if (ids.includes(areaId)) return groupId;
@@ -285,8 +400,12 @@ export function usePuzzleEngine({
         return areaId;
       };
 
-      // Group shared perimeters by (groupA, groupB)
-      const groupSharedMap = new Map<string, { areaAId: string; areaBId: string; paths: paper.PathItem[]; isMerged: boolean }>();
+      /**
+       * Maps from a pair of merged groups to their shared boundary info.
+       * Key: "groupA::groupB" (sorted)
+       * Value: combined pathData of all shared perimeters between the groups, plus isMerged flag
+       */
+      const groupSharedMap = new Map<string, { areaAId: string; areaBId: string; paths: paper.PathItem[] }>();
 
       for (let i = 0; i < leafAreas.length; i++) {
         for (let j = i + 1; j < leafAreas.length; j++) {
@@ -298,18 +417,18 @@ export function usePuzzleEngine({
 
           const groupA = getGroupId(areaA.id);
           const groupB = getGroupId(areaB.id);
-          const isMerged = groupA === groupB;
+          if (groupA === groupB) { shared.remove(); continue; }
 
           const key = [groupA, groupB].sort().join('::');
           if (!groupSharedMap.has(key)) {
-            groupSharedMap.set(key, { areaAId: areaA.id, areaBId: areaB.id, paths: [], isMerged });
+            groupSharedMap.set(key, { areaAId: areaA.id, areaBId: areaB.id, paths: [] });
           }
           groupSharedMap.get(key)!.paths.push(shared);
         }
       }
 
       for (const [key, data] of groupSharedMap.entries()) {
-        const { areaAId, areaBId, paths, isMerged } = data;
+        const { areaAId, areaBId, paths } = data;
         
         // Combine all paths for this group pair
         let combined: paper.PathItem | null = null;
@@ -349,7 +468,6 @@ export function usePuzzleEngine({
             areaAId,
             areaBId,
             pathData: (combined as any).pathData,
-            isMerged
           });
         }
         combined?.remove();
