@@ -43,7 +43,7 @@ export default function V3App() {
   const [connectorHeadScale, setConnectorHeadScale] = useState(1.0);
   const [connectorHeadRotation, setConnectorHeadRotation] = useState(0);
   const [connectorHeadOffset, setConnectorHeadOffset] = useState(0);
-  const [useEquidistantHeadPoint, setUseEquidistantHeadPoint] = useState(false);
+  const [useEquidistantHeadPoint, setUseEquidistantHeadPoint] = useState(true);
   const [selectedConnectorId, setSelectedConnectorId] = useState<string | null>(null);
   const lastConnectorClickTime = useRef(0);
 
@@ -75,7 +75,7 @@ export default function V3App() {
       setConnectorHeadScale(c.headScale);
       setConnectorHeadRotation(c.headRotationDeg);
       setConnectorHeadOffset(c.headOffset);
-      setUseEquidistantHeadPoint(c.useEquidistantHeadPoint || false);
+      setUseEquidistantHeadPoint(c.useEquidistantHeadPoint !== undefined ? c.useEquidistantHeadPoint : true);
     }
   }, [selectedConnectorId]); // Only sync when selection changes
 
@@ -158,7 +158,7 @@ export default function V3App() {
 
   const handlePieceClick = useCallback((id: string | null, pt?: Point) => {
     // Prevent piece click from firing immediately after a connector click
-    if (Date.now() - lastConnectorClickTime.current < 150) return;
+    if (Date.now() - lastConnectorClickTime.current < 200) return;
 
     if (activeTab === 'CONNECTION') {
       if (!id) {
@@ -196,7 +196,13 @@ export default function V3App() {
   const handleConnectorSelect = useCallback((id: string | null) => {
     lastConnectorClickTime.current = Date.now();
     setSelectedConnectorId(id);
-  }, []);
+    if (id) {
+      const c = connectors[id];
+      if (c && !selectedIds.includes(c.pieceId)) {
+        setSelectedIds([c.pieceId]);
+      }
+    }
+  }, [connectors, selectedIds]);
 
   const handleAddConnector = useCallback(() => {
     if (selectedIds.length !== 1) return;

@@ -328,8 +328,10 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
           {renderedConnectors.map(c => {
             const isSelected = selectedConnectorId === c!.id;
             const isPieceSelected = selectedIds.includes(c!.pieceId);
-            // Only show handle if the connector itself is selected OR if no connector is selected and the piece is selected
-            const showHandle = activeTab === 'CONNECTION' && isPieceSelected && (isSelected || !selectedConnectorId);
+            // Show handle if:
+            // 1. The connector itself is selected
+            // 2. OR if no connector is selected, it's the connection tab, and the piece is selected
+            const showHandle = activeTab === 'CONNECTION' && (isSelected || (isPieceSelected && !selectedConnectorId));
 
             return (
               <g 

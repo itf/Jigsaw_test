@@ -357,11 +357,11 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
             </div>
 
             <div className="flex items-center gap-2">
-              <Label>Equidistant</Label>
+              <Label>Closest Point</Label>
               <input 
                 type="checkbox" 
-                checked={useEquidistantHeadPoint} 
-                onChange={e => setUseEquidistantHeadPoint(e.target.checked)}
+                checked={!useEquidistantHeadPoint} 
+                onChange={e => setUseEquidistantHeadPoint(!e.target.checked)}
                 className="w-4 h-4 rounded border-slate-200 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
               />
             </div>
