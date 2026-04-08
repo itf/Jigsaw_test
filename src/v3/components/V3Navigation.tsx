@@ -11,8 +11,8 @@ export const V3Navigation: React.FC<V3NavigationProps> = ({ activeTab, setActive
   const tabs = [
     { id: 'TOPOLOGY', icon: Move, label: 'Topology' },
     { id: 'MODIFICATION', icon: Layers, label: 'Modification' },
-    { id: 'CONNECTION', icon: LinkIcon, label: 'Connection' },
     { id: 'MASS_CONNECTION', icon: Network, label: 'Mass' },
+    { id: 'CONNECTION', icon: LinkIcon, label: 'Connection' },
     { id: 'RESOLUTION', icon: Zap, label: 'Resolution' },
     { id: 'TRANSFORMATION', icon: Type, label: 'Transformation' },
     { id: 'PRODUCTION', icon: Download, label: 'Production' },

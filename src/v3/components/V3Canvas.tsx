@@ -35,10 +35,15 @@ interface V3CanvasProps {
   connectorHeadScale: number;
   connectorHeadRotation: number;
   connectorJitter: number;
+  connectorJitterSeed: number;
   useEquidistantHeadPoint: boolean;
   selectedConnectorId: string | null;
   onConnectorSelect: (id: string | null) => void;
   onConnectorUpdate: (id: string, updates: Partial<Connector>) => void;
+  rectSelectMode: boolean;
+  rectStart: Point | null;
+  onRectPoint: (pt: Point) => void;
+  previewConnectors: Record<string, Connector>;
 }
 
 export const V3Canvas: React.FC<V3CanvasProps> = ({ 
@@ -63,10 +68,15 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
   connectorHeadScale,
   connectorHeadRotation,
   connectorJitter,
+  connectorJitterSeed,
   useEquidistantHeadPoint,
   selectedConnectorId,
   onConnectorSelect,
   onConnectorUpdate,
+  rectSelectMode,
+  rectStart,
+  onRectPoint,
+  previewConnectors,
 }) => {
   const { areas, connectors, whimsies, width, height } = puzzleState;
   const outerRef = useRef<HTMLDivElement>(null);
@@ -143,7 +153,7 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
       const normal = getNormalOnBoundary(piece.boundary, connectionT, connectionPathIndex);
       const neighborId = findNeighborPiece(areas, piece.id, pt, normal);
       
-      // Generate preview connector
+      // Generate preview connector using the stable preview seed
       const preview = generateConnectorPath(
         piece.boundary,
         connectionPathIndex,
@@ -155,7 +165,8 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
         connectorHeadRotation,
         useEquidistantHeadPoint,
         whimsies,
-        connectorJitter
+        connectorJitter,
+        connectorJitterSeed
       );
 
       return { 
@@ -170,10 +181,68 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
       console.error('Failed to get connection data:', e);
       return null;
     }
-  }, [activeTab, selectedIds, areas, connectionT, connectionPathIndex, connectorWidthPx, connectorExtrusion, connectorHeadTemplate, connectorHeadScale, connectorHeadRotation, connectorJitter, whimsies]);
+  }, [activeTab, selectedIds, areas, connectionT, connectionPathIndex, connectorWidthPx, connectorExtrusion, connectorHeadTemplate, connectorHeadScale, connectorHeadRotation, connectorJitter, connectorJitterSeed, whimsies]);
+
+  // Cache rendered connector geometry per connector ID, keyed by a hash of inputs.
+  // This avoids recomputing all connectors when only one changes (e.g. during drag).
+  const connectorCacheRef = useRef<Record<string, { key: string; result: { id: string; pieceId: string; pathData: string; basePathData: string; color: string; point: { x: number; y: number }; normal: { x: number; y: number }; boundary: paper.PathItem } }>>({});
 
   const renderedConnectors = useMemo(() => {
+    const cache = connectorCacheRef.current;
+    // Remove stale entries for deleted connectors
+    for (const id in cache) {
+      if (!connectors[id]) delete cache[id];
+    }
+
     return (Object.values(connectors) as Connector[]).map(c => {
+      const piece = areas[c.pieceId];
+      if (!piece) return null;
+
+      // Build a stable key from all inputs that affect geometry
+      const key = `${c.pieceId}|${c.pathIndex}|${c.midT}|${c.widthPx}|${c.extrusion}|${c.headTemplateId}|${c.headScale}|${c.headRotationDeg}|${c.useEquidistantHeadPoint}|${c.jitter || 0}|${c.jitterSeed || 0}`;
+      const cached = cache[c.id];
+      if (cached && cached.key === key) {
+        return cached.result;
+      }
+
+      try {
+        const result = generateConnectorPath(
+          piece.boundary,
+          c.pathIndex,
+          c.midT,
+          c.widthPx,
+          c.extrusion,
+          c.headTemplateId,
+          c.headScale,
+          c.headRotationDeg,
+          c.useEquidistantHeadPoint,
+          whimsies,
+          c.jitter || 0,
+          c.jitterSeed || 0
+        );
+        const pt = getPointOnBoundary(piece.boundary, c.midT, c.pathIndex);
+        const normal = getNormalOnBoundary(piece.boundary, c.midT, c.pathIndex);
+
+        const entry = {
+          id: c.id,
+          pieceId: c.pieceId,
+          pathData: result.pathData,
+          basePathData: result.basePathData,
+          color: piece.color,
+          point: { x: pt.x, y: pt.y },
+          normal: { x: normal.x, y: normal.y },
+          boundary: piece.boundary
+        };
+        cache[c.id] = { key, result: entry };
+        return entry;
+      } catch (e) {
+        return null;
+      }
+    }).filter(Boolean);
+  }, [connectors, areas, whimsies]);
+
+  const renderedPreviewConnectors = useMemo(() => {
+    return (Object.values(previewConnectors) as Connector[]).map(c => {
       const piece = areas[c.pieceId];
       if (!piece) return null;
       try {
@@ -188,26 +257,15 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
           c.headRotationDeg,
           c.useEquidistantHeadPoint,
           whimsies,
-          c.jitter || 0
+          c.jitter || 0,
+          c.jitterSeed || 0
         );
-        const pt = getPointOnBoundary(piece.boundary, c.midT, c.pathIndex);
-        const normal = getNormalOnBoundary(piece.boundary, c.midT, c.pathIndex);
-
-        return {
-          id: c.id,
-          pieceId: c.pieceId,
-          pathData: result.pathData,
-          basePathData: result.basePathData,
-          color: piece.color,
-          point: { x: pt.x, y: pt.y },
-          normal: { x: normal.x, y: normal.y },
-          boundary: piece.boundary
-        };
+        return { id: c.id, pieceId: c.pieceId, pathData: result.pathData, color: piece.color };
       } catch (e) {
         return null;
       }
     }).filter(Boolean);
-  }, [connectors, areas, whimsies]);
+  }, [previewConnectors, areas, whimsies]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     let clientX, clientY;
@@ -220,7 +278,7 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
     }
 
     const boardPt = clientToBoard(clientX, clientY);
-    if (whimsyPlacementActive) {
+    if (whimsyPlacementActive || rectSelectMode) {
       setMousePos(boardPt);
     }
     if (isDraggingNewHandler && connectionData) {
@@ -234,7 +292,7 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
         onConnectorUpdate(draggingConnectorId, { midT: t, pathIndex });
       }
     }
-  }, [whimsyPlacementActive, isDraggingNewHandler, draggingConnectorId, connectionData, renderedConnectors, clientToBoard, onConnectionUpdate, onConnectorUpdate]);
+  }, [whimsyPlacementActive, rectSelectMode, isDraggingNewHandler, draggingConnectorId, connectionData, renderedConnectors, clientToBoard, onConnectionUpdate, onConnectorUpdate]);
 
   const handleMouseUp = useCallback(() => {
     setIsDraggingNewHandler(false);
@@ -280,8 +338,8 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
         >
           <defs>
             <filter id="piece-selection-glow" x="-40%" y="-40%" width="180%" height="180%">
-              <feGaussianBlur in="SourceAlpha" stdDeviation="3" result="blur" />
-              <feFlood floodColor="#4338ca" floodOpacity="0.55" result="glowColor" />
+              <feGaussianBlur in="SourceAlpha" stdDeviation="5" result="blur" />
+              <feFlood floodColor="#4338ca" floodOpacity="0.75" result="glowColor" />
               <feComposite in="glowColor" in2="blur" operator="in" result="softGlow" />
               <feMerge>
                 <feMergeNode in="softGlow" />
@@ -297,7 +355,11 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
             fill="transparent"
             onClick={(e) => {
               e.stopPropagation();
-              onClick(null);
+              if (rectSelectMode) {
+                onRectPoint(clientToBoard(e.clientX, e.clientY));
+              } else {
+                onClick(null);
+              }
             }}
           />
 
@@ -307,24 +369,49 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
             const isNeighbor = connectionData?.neighborId === piece.id;
 
             return (
-              <path
-                key={piece.id}
-                d={piece.boundary.pathData}
-                fill={piece.color}
-                fillRule="evenodd"
-                stroke={isSelected ? (activeTab === 'CONNECTION' ? '#10b981' : '#4f46e5') : isNeighbor ? '#fbbf24' : isHovered ? '#6366f1' : '#000'}
-                strokeWidth={isSelected ? 3 : isNeighbor ? 3 : isHovered ? 2 : 1}
-                strokeLinejoin="round"
-                strokeLinecap="round"
-                filter={isSelected ? 'url(#piece-selection-glow)' : undefined}
-                className="transition-all cursor-pointer hover:opacity-90"
-                onMouseEnter={() => onHover(piece.id)}
-                onMouseLeave={() => onHover(null)}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onClick(piece.id, clientToBoard(e.clientX, e.clientY));
-                }}
-              />
+              <g key={piece.id}>
+                <path
+                  d={piece.boundary.pathData}
+                  fill={piece.color}
+                  fillRule="evenodd"
+                  stroke={isSelected ? (activeTab === 'CONNECTION' ? '#10b981' : '#4f46e5') : isNeighbor ? '#fbbf24' : isHovered ? '#6366f1' : '#000'}
+                  strokeWidth={isSelected ? 4 : isNeighbor ? 3 : isHovered ? 2 : 1}
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                  filter={isSelected ? 'url(#piece-selection-glow)' : undefined}
+                  className={`transition-all ${rectSelectMode ? 'cursor-crosshair' : 'cursor-pointer hover:opacity-90'}`}
+                  onMouseEnter={() => onHover(piece.id)}
+                  onMouseLeave={() => onHover(null)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (rectSelectMode) {
+                      onRectPoint(clientToBoard(e.clientX, e.clientY));
+                    } else {
+                      onClick(piece.id, clientToBoard(e.clientX, e.clientY));
+                    }
+                  }}
+                />
+                {isSelected && (
+                  <>
+                    <path
+                      d={piece.boundary.pathData}
+                      fill="rgba(99, 102, 241, 0.18)"
+                      fillRule="evenodd"
+                      className="pointer-events-none"
+                    />
+                    <path
+                      d={piece.boundary.pathData}
+                      fill="none"
+                      stroke="white"
+                      strokeWidth={2}
+                      strokeDasharray="5 3"
+                      fillRule="evenodd"
+                      strokeLinejoin="round"
+                      className="pointer-events-none"
+                    />
+                  </>
+                )}
+              </g>
             );
           })}
 
@@ -336,17 +423,17 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
             // Show handle if:
             // 1. The connector itself is selected
             // 2. OR if no connector is selected, it's the connection tab, and the piece is selected
-            const showHandle = activeTab === 'CONNECTION' && (isSelected || (isPieceSelected && !selectedConnectorId));
+            const showHandle = (activeTab === 'CONNECTION' || activeTab === 'MASS_CONNECTION') && (isSelected || (isPieceSelected && !selectedConnectorId));
 
-            if (isDisabled && activeTab !== 'CONNECTION') return null;
+            if (isDisabled && activeTab !== 'CONNECTION' && activeTab !== 'MASS_CONNECTION') return null;
 
             return (
-              <g 
-                key={c!.id} 
-                className={activeTab === 'CONNECTION' ? 'cursor-pointer' : 'pointer-events-none'}
+              <g
+                key={c!.id}
+                className={(activeTab === 'CONNECTION' || activeTab === 'MASS_CONNECTION') ? 'cursor-pointer' : 'pointer-events-none'}
                 opacity={isDisabled ? 0.3 : 1}
                 onClick={(e) => {
-                  if (activeTab === 'CONNECTION') {
+                  if (activeTab === 'CONNECTION' || activeTab === 'MASS_CONNECTION') {
                     e.stopPropagation();
                     onConnectorSelect(c!.id);
                   }
@@ -401,6 +488,21 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
               </g>
             );
           })}
+
+          {/* Preview connectors (mass tab) — rendered ghosted */}
+          {renderedPreviewConnectors.map(c => (
+            <path
+              key={c!.id}
+              d={c!.pathData}
+              fill={c!.color}
+              fillOpacity={0.5}
+              stroke="#f59e0b"
+              strokeWidth={1.5}
+              strokeDasharray="4 2"
+              strokeLinejoin="round"
+              className="pointer-events-none"
+            />
+          ))}
 
           {connectionData && (
             <g>
@@ -481,6 +583,20 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
             </g>
           </g>
         )}
+
+          {rectSelectMode && rectStart && (
+            <rect
+              x={Math.min(rectStart.x, mousePos.x)}
+              y={Math.min(rectStart.y, mousePos.y)}
+              width={Math.abs(mousePos.x - rectStart.x)}
+              height={Math.abs(mousePos.y - rectStart.y)}
+              fill="rgba(99, 102, 241, 0.1)"
+              stroke="#6366f1"
+              strokeWidth={1}
+              strokeDasharray="4 2"
+              className="pointer-events-none"
+            />
+          )}
 
           {whimsyPlacementActive && whimsyPreviewPathData && (
             <g 

@@ -1,6 +1,17 @@
 import paper from 'paper';
 import { Area, AreaType, Connector, Whimsy } from '../types';
 
+/** Simple seeded pseudo-random number generator (mulberry32). Returns values in [0, 1). */
+function makeRng(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s += 0x6d2b79f5;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) >>> 0;
+    return ((t ^ (t >>> 14)) >>> 0) / 0x100000000;
+  };
+}
+
 /**
  * Finds a neighbor piece by sampling a point slightly outside the current piece's boundary.
  */
@@ -40,7 +51,8 @@ export function generateConnectorPath(
   headRotationDeg: number,
   useEquidistantHeadPoint: boolean = true,
   whimsies: Whimsy[] = [],
-  jitter: number = 0
+  jitter: number = 0,
+  jitterSeed: number = 0
 ): { pathData: string, basePathData: string, headCenter: paper.Point } {
   const children = boundary instanceof paper.CompoundPath 
     ? (boundary.children.filter(c => c instanceof paper.Path) as paper.Path[])
@@ -206,28 +218,29 @@ export function generateConnectorPath(
   // Side edge 2: rightHeadPt to p1 (handled by closing the path)
   neck.add(rightHeadPt);
   neck.closed = true;
-  
-  // 5. Combine using boolean union
-  const combined = neck.unite(head);
 
-  // 6. Apply Jitter if requested
+  // 5. Apply jitter to head only, before union with neck
   if (jitter > 0) {
+    const rng = makeRng(jitterSeed);
     const applyJitter = (path: paper.Path) => {
       path.segments.forEach(seg => {
         seg.point = seg.point.add(new paper.Point(
-          (Math.random() - 0.5) * jitter,
-          (Math.random() - 0.5) * jitter
+          (rng() - 0.5) * jitter,
+          (rng() - 0.5) * jitter
         ));
       });
     };
-    if (combined instanceof paper.Path) {
-      applyJitter(combined);
-    } else if (combined instanceof paper.CompoundPath) {
-      combined.children.forEach(child => {
+    if (head instanceof paper.Path) {
+      applyJitter(head);
+    } else if (head instanceof paper.CompoundPath) {
+      head.children.forEach(child => {
         if (child instanceof paper.Path) applyJitter(child);
       });
     }
   }
+
+  // 6. Combine using boolean union
+  const combined = neck.unite(head);
 
   const pathData = combined.pathData;
   

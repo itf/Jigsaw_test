@@ -2,13 +2,12 @@
  * Generates SVG path data for a circle approximation.
  */
 export function circlePathData(cx: number, cy: number, r: number, segments: number = 72): string {
-  const parts: string[] = [];
-  for (let i = 0; i < segments; i++) {
-    const a = (i * 2 * Math.PI) / segments;
-    const x = cx + r * Math.cos(a);
-    const y = cy + r * Math.sin(a);
-    parts.push(i === 0 ? `M ${x} ${y}` : `L ${x} ${y}`);
-  }
-  parts.push('Z');
-  return parts.join(' ');
+  // Move to the rightmost point of the circle
+  const startX = cx + r;
+  const startY = cy;
+
+  // Use two arc commands to draw a complete circle (SVG can't draw a full circle with one arc)
+  // First arc: top half of circle
+  // Second arc: bottom half of circle
+  return `M ${startX} ${startY} A ${r} ${r} 0 0 1 ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${startX} ${startY} Z`;
 }

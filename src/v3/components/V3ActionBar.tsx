@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Grid, Hexagon, Shuffle, Link as LinkIcon, Download, RefreshCw, Trash2, X, Layers, Merge, Circle, Star, Sparkles, Plus, Book, Network } from 'lucide-react';
+import { Grid, Hexagon, Shuffle, Link as LinkIcon, Download, RefreshCw, Trash2, X, Layers, Merge, Circle, Star, Sparkles, Plus, Book, Network, Crop } from 'lucide-react';
 import { Tab } from '../../v2/constants';
 import { WheelSlider } from './ui/WheelSlider';
 import { WhimsyLibrary } from './WhimsyLibrary';
@@ -59,10 +59,19 @@ interface V3ActionBarProps {
   connectorJitter: number;
   setConnectorJitter: (v: number) => void;
   onAddMassConnectors: (params: any) => void;
+  onPreviewMassConnectors: (params: any) => void;
+  onCommitPreviewConnectors: () => void;
+  hasPreview: boolean;
   onResolveConflicts: () => void;
   whimsies: Whimsy[];
   onUploadWhimsy: (w: Whimsy) => void;
   onRemoveWhimsy: (id: string) => void;
+  onSelectAll: () => void;
+  onUnselectAll: () => void;
+  rectSelectMode: boolean;
+  onToggleRectSelect: () => void;
+  massHeadIds: string[];
+  setMassHeadIds: (ids: string[]) => void;
 }
 
 const Label: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -132,10 +141,19 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
   connectorJitter,
   setConnectorJitter,
   onAddMassConnectors,
+  onPreviewMassConnectors,
+  onCommitPreviewConnectors,
+  hasPreview,
   onResolveConflicts,
   whimsies,
   onUploadWhimsy,
   onRemoveWhimsy,
+  onSelectAll,
+  onUnselectAll,
+  rectSelectMode,
+  onToggleRectSelect,
+  massHeadIds,
+  setMassHeadIds,
 }) => {
   const [showWhimsyLibrary, setShowWhimsyLibrary] = useState(false);
   const [libraryMode, setLibraryMode] = useState<'WHIMSY' | 'CONNECTOR'>('WHIMSY');
@@ -232,6 +250,32 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
             >
               <RefreshCw className="w-3 h-3" />
               <span className="text-[10px] font-bold uppercase">Clean</span>
+            </button>
+
+            <Divider />
+            <button
+              type="button"
+              onClick={onSelectAll}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-all shrink-0 bg-slate-100 text-slate-700 hover:bg-slate-200"
+            >
+              <Layers className="w-3 h-3" />
+              <span className="text-[10px] font-bold uppercase">All</span>
+            </button>
+            <button
+              type="button"
+              onClick={onUnselectAll}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-all shrink-0 bg-slate-100 text-slate-700 hover:bg-slate-200"
+            >
+              <X className="w-3 h-3" />
+              <span className="text-[10px] font-bold uppercase">None</span>
+            </button>
+            <button
+              type="button"
+              onClick={onToggleRectSelect}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-all shrink-0 ${rectSelectMode ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
+            >
+              <Crop className="w-3 h-3" />
+              <span className="text-[10px] font-bold uppercase">Rect</span>
             </button>
 
             <Divider />
@@ -500,13 +544,20 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
       )}
 
       {activeTab === 'MASS_CONNECTION' && (
-        <V3MassConnectionTab 
+        <V3MassConnectionTab
           selectedIds={selectedIds}
           whimsies={whimsies}
-          connectorHeadTemplate={connectorHeadTemplate}
-          setConnectorHeadTemplate={setConnectorHeadTemplate}
+          selectedHeadIds={massHeadIds}
+          setSelectedHeadIds={setMassHeadIds}
           onAddMassConnectors={onAddMassConnectors}
+          onPreviewMassConnectors={onPreviewMassConnectors}
+          onCommitPreviewConnectors={onCommitPreviewConnectors}
+          hasPreview={hasPreview}
           onResolveConflicts={onResolveConflicts}
+          onSelectAll={onSelectAll}
+          onUnselectAll={onUnselectAll}
+          rectSelectMode={rectSelectMode}
+          onToggleRectSelect={onToggleRectSelect}
         />
       )}
 

@@ -29,6 +29,7 @@ export interface Connector {
   headRotationDeg: number;
   useEquidistantHeadPoint?: boolean;
   jitter?: number;
+  jitterSeed?: number;
   disabled?: boolean;
 }
 

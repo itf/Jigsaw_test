@@ -7,7 +7,7 @@ import { V3Canvas } from './components/V3Canvas';
 import { V3ProductionTab } from './components/V3ProductionTab';
 import { V3CreateModal } from './components/V3CreateModal';
 import { Tab } from '../v2/constants';
-import { Point, AreaType } from './types';
+import { Point, AreaType, Connector } from './types';
 import { getPathCount, getClosestLocationOnBoundary } from './utils/paperUtils';
 import paper from 'paper';
 
@@ -19,6 +19,8 @@ export default function V3App() {
   
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [rectSelectMode, setRectSelectMode] = useState(false);
+  const [rectStart, setRectStart] = useState<Point | null>(null);
 
   // Subdivision Parameters
   const [gridRows, setGridRows] = useState(4);
@@ -47,12 +49,19 @@ export default function V3App() {
   const [useEquidistantHeadPoint, setUseEquidistantHeadPoint] = useState(true);
   const [selectedConnectorId, setSelectedConnectorId] = useState<string | null>(null);
   const lastConnectorClickTime = useRef(0);
+  const [massHeadIds, setMassHeadIds] = useState<string[]>(['circle']);
 
-  const { 
-    puzzleState, 
-    createRoot, 
-    subdivideGrid, 
-    mergePieces, 
+  // Preview state
+  const [previewConnectors, setPreviewConnectors] = useState<Record<string, Connector>>({});
+  // Stable seed for the CONNECTION tab single-connector preview (regenerated when piece selection changes)
+  const [previewJitterSeed, setPreviewJitterSeed] = useState<number>(() => (Math.random() * 0xffffffff) >>> 0);
+  const previewJitterSeedRef = useRef<number>(previewJitterSeed);
+
+  const {
+    puzzleState,
+    createRoot,
+    subdivideGrid,
+    mergePieces,
     addWhimsy,
     addConnector,
     updateConnector,
@@ -60,10 +69,12 @@ export default function V3App() {
     addWhimsyToLibrary,
     removeWhimsyFromLibrary,
     addMassConnectors,
+    generateMassConnectors,
+    commitPreviewConnectors,
     resolveConnectorConflicts,
     validateGrid,
     cleanPuzzle,
-    reset 
+    reset
   } = usePuzzleEngineV3();
 
   const { areas, connectors, whimsies, width, height } = puzzleState;
@@ -151,6 +162,34 @@ export default function V3App() {
     setSelectedIds([]);
   }, [selectedIds, mergePieces]);
 
+  const handleSelectAll = useCallback(() => {
+    const allIds = (Object.values(areas) as any[])
+      .filter(a => a.type === AreaType.PIECE)
+      .map(a => a.id);
+    setSelectedIds(allIds);
+  }, [areas]);
+
+  const handleRectSelect = useCallback((start: Point, end: Point) => {
+    const minX = Math.min(start.x, end.x);
+    const maxX = Math.max(start.x, end.x);
+    const minY = Math.min(start.y, end.y);
+    const maxY = Math.max(start.y, end.y);
+
+    const ids = (Object.values(areas) as any[])
+      .filter(a => a.type === AreaType.PIECE)
+      .filter(a => {
+        const b = a.boundary.bounds;
+        // Include piece if its center is inside the rect
+        const cx = (b.x + b.width / 2);
+        const cy = (b.y + b.height / 2);
+        return cx >= minX && cx <= maxX && cy >= minY && cy <= maxY;
+      })
+      .map(a => a.id);
+    setSelectedIds(ids);
+    setRectSelectMode(false);
+    setRectStart(null);
+  }, [areas]);
+
   const handleWhimsyCommit = useCallback((p: Point) => {
     addWhimsy({
       templateId: whimsyTemplate,
@@ -209,9 +248,18 @@ export default function V3App() {
     }
   }, [connectors, selectedIds]);
 
+  // Regenerate the preview jitter seed whenever the selected piece changes (CONNECTION tab)
+  const selectedPiece = selectedIds.length === 1 ? selectedIds[0] : null;
+  useEffect(() => {
+    const newSeed = (Math.random() * 0xffffffff) >>> 0;
+    setPreviewJitterSeed(newSeed);
+    previewJitterSeedRef.current = newSeed;
+  }, [selectedPiece]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleAddConnector = useCallback(() => {
     if (selectedIds.length !== 1) return;
     const pieceId = selectedIds[0];
+    // Commit with the same seed that was shown in preview
     addConnector({
       pieceId,
       pathIndex: connectionPathIndex,
@@ -222,9 +270,31 @@ export default function V3App() {
       headScale: connectorHeadScale,
       headRotationDeg: connectorHeadRotation,
       jitter: connectorJitter,
+      jitterSeed: previewJitterSeedRef.current,
       useEquidistantHeadPoint: useEquidistantHeadPoint
     });
+    // Regenerate seed so next preview has a different jitter
+    const newSeed = (Math.random() * 0xffffffff) >>> 0;
+    setPreviewJitterSeed(newSeed);
+    previewJitterSeedRef.current = newSeed;
   }, [selectedIds, connectionT, connectionPathIndex, connectorWidthPx, connectorExtrusion, connectorHeadTemplate, connectorHeadScale, connectorHeadRotation, connectorJitter, useEquidistantHeadPoint, addConnector]);
+
+  // Mass preview handlers
+  const handlePreviewMassConnectors = useCallback((params: Parameters<typeof addMassConnectors>[0]) => {
+    const generated = generateMassConnectors(params);
+    setPreviewConnectors(generated);
+  }, [generateMassConnectors]);
+
+  const handleCommitPreviewConnectors = useCallback(() => {
+    commitPreviewConnectors(previewConnectors);
+    setPreviewConnectors({});
+  }, [commitPreviewConnectors, previewConnectors]);
+
+  // Clear preview when tab changes
+  const handleSetActiveTab = useCallback((tab: Tab) => {
+    setPreviewConnectors({});
+    setActiveTab(tab);
+  }, []);
 
   const fitScale = Math.max(0.1, Math.min(containerSize.w / (width || 800), containerSize.h / (height || 600)) * 0.9);
 
@@ -236,7 +306,7 @@ export default function V3App() {
 
       <V3Header onReset={() => { reset(); setShowCreateModal(true); }} />
 
-      <V3Navigation activeTab={activeTab} setActiveTab={setActiveTab} />
+      <V3Navigation activeTab={activeTab} setActiveTab={handleSetActiveTab} />
 
       <V3ActionBar 
         activeTab={activeTab}
@@ -291,15 +361,27 @@ export default function V3App() {
         connectorJitter={connectorJitter}
         setConnectorJitter={setConnectorJitter}
         onAddMassConnectors={addMassConnectors}
+        onPreviewMassConnectors={handlePreviewMassConnectors}
+        onCommitPreviewConnectors={handleCommitPreviewConnectors}
+        hasPreview={Object.keys(previewConnectors).length > 0}
         onResolveConflicts={resolveConnectorConflicts}
         whimsies={whimsies}
         onUploadWhimsy={addWhimsyToLibrary}
         onRemoveWhimsy={removeWhimsyFromLibrary}
+        onSelectAll={handleSelectAll}
+        onUnselectAll={() => setSelectedIds([])}
+        rectSelectMode={rectSelectMode}
+        onToggleRectSelect={() => {
+          setRectSelectMode(prev => !prev);
+          setRectStart(null);
+        }}
+        massHeadIds={massHeadIds}
+        setMassHeadIds={setMassHeadIds}
       />
 
       <main className="flex-1 relative overflow-hidden flex flex-col" ref={containerRef}>
         {activeTab === 'PRODUCTION' ? (
-          <V3ProductionTab puzzleState={puzzleState} />
+          <V3ProductionTab puzzleState={puzzleState} onResolveConflicts={resolveConnectorConflicts} />
         ) : (
           <V3Canvas 
             puzzleState={puzzleState}
@@ -318,16 +400,26 @@ export default function V3App() {
             connectionPathIndex={connectionPathIndex}
             onConnectionUpdate={handleConnectionUpdate}
             connectorWidthPx={connectorWidthPx}
-            setConnectorWidthPx={setConnectorWidthPx}
             connectorExtrusion={connectorExtrusion}
             connectorHeadTemplate={connectorHeadTemplate}
             connectorHeadScale={connectorHeadScale}
             connectorHeadRotation={connectorHeadRotation}
             connectorJitter={connectorJitter}
+            connectorJitterSeed={previewJitterSeed}
             useEquidistantHeadPoint={useEquidistantHeadPoint}
             selectedConnectorId={selectedConnectorId}
+            previewConnectors={previewConnectors}
             onConnectorSelect={handleConnectorSelect}
             onConnectorUpdate={updateConnector}
+            rectSelectMode={rectSelectMode}
+            rectStart={rectStart}
+            onRectPoint={(pt: Point) => {
+              if (!rectStart) {
+                setRectStart(pt);
+              } else {
+                handleRectSelect(rectStart, pt);
+              }
+            }}
           />
         )}
       </main>

@@ -52,7 +52,36 @@ function pickUniqueColor(neighborColors: Set<string>): string {
   return generateSafeRandomColor();
 }
 
-export function usePuzzleEngineV3() {
+type MassConnectorParams = {
+  pieceIds: string[];
+  widthRange: [number, number];
+  extrusionRange: [number, number];
+  positionOffsetRange: [number, number];
+  headTemplateIds: string[];
+  headScaleRange: [number, number];
+  headRotationRange: [number, number];
+  jitterRange: [number, number];
+};
+
+export function usePuzzleEngineV3(): {
+  puzzleState: PuzzleState;
+  createRoot: (w: number, h: number) => void;
+  subdivideGrid: (params: any) => void;
+  mergePieces: (ids: string[]) => void;
+  addWhimsy: (params: any) => void;
+  addConnector: (connector: Omit<Connector, 'id'>) => void;
+  updateConnector: (id: string, updates: Partial<Connector>) => void;
+  removeConnector: (id: string) => void;
+  addWhimsyToLibrary: (w: Whimsy) => void;
+  removeWhimsyFromLibrary: (id: string) => void;
+  addMassConnectors: (params: MassConnectorParams) => void;
+  generateMassConnectors: (params: MassConnectorParams) => Record<string, Connector>;
+  commitPreviewConnectors: (previewConnectors: Record<string, Connector>) => void;
+  resolveConnectorConflicts: () => void;
+  validateGrid: () => void;
+  cleanPuzzle: () => void;
+  reset: () => void;
+} {
   const [areas, setAreas] = useState<Record<string, Area>>({});
   const [connectors, setConnectors] = useState<Record<string, Connector>>({});
   const [width, setWidth] = useState(800);
@@ -242,7 +271,9 @@ export function usePuzzleEngineV3() {
             const dist = pA.getDistance(pB);
             
             if (currentPath.intersects(otherPath) || dist < 2) {
-              const united = currentPath.unite(otherPath);
+              // In theory, unite then subtracting the intersection is completely redundant.
+              // in practice, this makes paper js much more reliable
+              const united = currentPath.unite(otherPath).subtract((currentPath.intersect(otherPath, {insert:false})),  {insert:false});
               currentPath.remove();
               currentPath = united;
               mergedIds.push(otherId);
@@ -394,7 +425,7 @@ export function usePuzzleEngineV3() {
     const id = `connector-${Math.random().toString(36).slice(2, 6)}`;
     setConnectors(prev => ({
       ...prev,
-      [id]: { ...connector, id }
+      [id]: { ...connector, id, jitterSeed: (Math.random() * 0xffffffff) >>> 0 }
     }));
   }, []);
 
@@ -433,91 +464,115 @@ export function usePuzzleEngineV3() {
     setWhimsies(prev => prev.filter(w => w.id !== id));
   }, []);
 
-  const addMassConnectors = useCallback((params: { 
-    pieceIds: string[], 
+  const generateMassConnectors = useCallback((params: {
+    pieceIds: string[],
     widthRange: [number, number],
     extrusionRange: [number, number],
     positionOffsetRange: [number, number],
-    headTemplateId: string,
+    headTemplateIds: string[],
     headScaleRange: [number, number],
     headRotationRange: [number, number],
     jitterRange: [number, number]
-  }) => {
-    const { 
-      pieceIds, 
-      widthRange, 
-      extrusionRange, 
-      positionOffsetRange, 
-      headTemplateId, 
-      headScaleRange, 
+  }): Record<string, Connector> => {
+    const {
+      pieceIds,
+      widthRange,
+      extrusionRange,
+      positionOffsetRange,
+      headTemplateIds,
+      headScaleRange,
       headRotationRange,
       jitterRange
     } = params;
 
-    setConnectors(prev => {
-      const next = { ...prev };
-      
-      pieceIds.forEach(id => {
-        const area = areas[id];
-        if (!area || area.type !== AreaType.PIECE) return;
-        
-        const boundary = area.boundary;
-        const children = boundary instanceof paper.CompoundPath 
-          ? (boundary.children.filter(c => c instanceof paper.Path) as paper.Path[])
-          : [boundary as paper.Path];
+    const generated: Record<string, Connector> = {};
 
-        children.forEach((path, pathIndex) => {
-          const samples = 20;
-          const neighborSegments = new Map<string, { tStart: number, tEnd: number }[]>();
-          
-          let currentNeighbor: string | null = null;
-          let segmentStart = 0;
+    pieceIds.forEach(id => {
+      const area = areas[id];
+      if (!area || area.type !== AreaType.PIECE) return;
 
-          for (let i = 0; i <= samples; i++) {
-            const t = i / samples;
-            const pt = path.getPointAt(path.length * t);
-            const normal = path.getNormalAt(path.length * t);
-            const neighborId = findNeighborPiece(areas, id, pt, normal);
-            
-            if (neighborId !== currentNeighbor) {
-              if (currentNeighbor && pieceIds.includes(currentNeighbor)) {
-                if (!neighborSegments.has(currentNeighbor)) neighborSegments.set(currentNeighbor, []);
-                neighborSegments.get(currentNeighbor)!.push({ tStart: segmentStart, tEnd: t });
-              }
-              currentNeighbor = neighborId;
-              segmentStart = t;
+      const boundary = area.boundary;
+      const children = boundary instanceof paper.CompoundPath
+        ? (boundary.children.filter(c => c instanceof paper.Path) as paper.Path[])
+        : [boundary as paper.Path];
+
+      children.forEach((path, pathIndex) => {
+        const samples = 20;
+        const neighborSegments = new Map<string, { tStart: number, tEnd: number }[]>();
+
+        let currentNeighbor: string | null = null;
+        let segmentStart = 0;
+
+        for (let i = 0; i <= samples; i++) {
+          const t = i / samples;
+          const pt = path.getPointAt(path.length * t);
+          const normal = path.getNormalAt(path.length * t);
+          const neighborId = findNeighborPiece(areas, id, pt, normal);
+
+          if (neighborId !== currentNeighbor) {
+            if (currentNeighbor && pieceIds.includes(currentNeighbor)) {
+              if (!neighborSegments.has(currentNeighbor)) neighborSegments.set(currentNeighbor, []);
+              neighborSegments.get(currentNeighbor)!.push({ tStart: segmentStart, tEnd: t });
             }
+            currentNeighbor = neighborId;
+            segmentStart = t;
           }
+        }
 
-          neighborSegments.forEach((segments, neighborId) => {
-            if (id > neighborId) return;
+        neighborSegments.forEach((segments, neighborId) => {
+          if (id > neighborId) return;
 
-            segments.forEach(seg => {
-              const midT = (seg.tStart + seg.tEnd) / 2;
-              const rand = (range: [number, number]) => range[0] + Math.random() * (range[1] - range[0]);
-              
-              const connectorId = `connector-${Math.random().toString(36).slice(2, 6)}`;
-              next[connectorId] = {
-                id: connectorId,
-                pieceId: id,
-                pathIndex,
-                midT: midT + (Math.random() - 0.5) * rand(positionOffsetRange),
-                widthPx: rand(widthRange),
-                extrusion: rand(extrusionRange),
-                headTemplateId,
-                headScale: rand(headScaleRange),
-                headRotationDeg: rand(headRotationRange),
-                jitter: rand(jitterRange),
-                useEquidistantHeadPoint: true
-              };
-            });
+          segments.forEach(seg => {
+            const baseMidT = (seg.tStart + seg.tEnd) / 2;
+            const rand = (range: [number, number]) => range[0] + Math.random() * (range[1] - range[0]);
+
+            const jitterPx = rand(positionOffsetRange);
+            const jitterT = path.length > 0 ? jitterPx / path.length : 0;
+            let midT = baseMidT + (Math.random() - 0.5) * 2 * jitterT;
+            midT = ((midT % 1) + 1) % 1;
+
+            const headTemplateId = headTemplateIds[Math.floor(Math.random() * headTemplateIds.length)];
+            const connectorId = `connector-${Math.random().toString(36).slice(2, 6)}`;
+
+            generated[connectorId] = {
+              id: connectorId,
+              pieceId: id,
+              pathIndex,
+              midT,
+              widthPx: rand(widthRange),
+              extrusion: rand(extrusionRange),
+              headTemplateId,
+              headScale: rand(headScaleRange),
+              headRotationDeg: rand(headRotationRange),
+              jitter: rand(jitterRange),
+              jitterSeed: (Math.random() * 0xffffffff) >>> 0,
+              useEquidistantHeadPoint: true
+            };
           });
         });
       });
-
-      return next;
     });
+
+    return generated;
   }, [areas]);
+
+  const addMassConnectors = useCallback((params: {
+    pieceIds: string[],
+    widthRange: [number, number],
+    extrusionRange: [number, number],
+    positionOffsetRange: [number, number],
+    headTemplateIds: string[],
+    headScaleRange: [number, number],
+    headRotationRange: [number, number],
+    jitterRange: [number, number]
+  }) => {
+    const generated = generateMassConnectors(params);
+    setConnectors(prev => ({ ...prev, ...generated }));
+  }, [generateMassConnectors]);
+
+  const commitPreviewConnectors = useCallback((previewConnectors: Record<string, Connector>) => {
+    setConnectors(prev => ({ ...prev, ...previewConnectors }));
+  }, []);
 
   const resolveConnectorConflicts = useCallback(() => {
     setConnectors(prev => {
@@ -544,7 +599,8 @@ export function usePuzzleEngineV3() {
             c.headRotationDeg,
             c.useEquidistantHeadPoint,
             whimsies,
-            c.jitter
+            c.jitter,
+            c.jitterSeed || 0
           );
           paths[c.id] = new paper.CompoundPath({ pathData: result.pathData, insert: false });
         } catch (e) {
@@ -601,6 +657,8 @@ export function usePuzzleEngineV3() {
     addWhimsyToLibrary,
     removeWhimsyFromLibrary,
     addMassConnectors,
+    generateMassConnectors,
+    commitPreviewConnectors,
     resolveConnectorConflicts,
     validateGrid,
     cleanPuzzle,

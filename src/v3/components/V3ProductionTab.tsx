@@ -6,13 +6,14 @@ import { processProductionState, ProductionArea } from '../utils/production/proc
 import { mergeSmallAreas } from '../utils/production/mergeSmallAreas';
 import { deduplicateProductionPaths } from '../utils/production/deduplicatePaths';
 import { removeDanglingEdges } from '../utils/paperUtils';
-import { AlertCircle, Info, Scissors } from 'lucide-react';
+import { AlertCircle, Info, Scissors, Zap } from 'lucide-react';
 
 interface V3ProductionTabProps {
   puzzleState: PuzzleState;
+  onResolveConflicts: () => void;
 }
 
-export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState }) => {
+export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, onResolveConflicts }) => {
   const [productionAreas, setProductionAreas] = useState<ProductionArea[]>([]);
   const [mergeThreshold, setMergeThreshold] = useState(100);
   const [clipToNeighbors, setClipToNeighbors] = useState(false);
@@ -228,6 +229,13 @@ export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState })
             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Pieces</div>
             <div className="text-lg font-bold text-slate-700 tabular-nums">{productionAreas.length}</div>
           </div>
+          <button
+            onClick={onResolveConflicts}
+            className="flex items-center gap-2 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-all shadow-sm font-medium"
+          >
+            <Zap className="w-4 h-4" />
+            Resolve Conflicts
+          </button>
           <button
             onClick={handleDownloadSVG}
             disabled={productionAreas.length === 0}

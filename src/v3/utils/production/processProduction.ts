@@ -43,8 +43,8 @@ export function processProductionState(puzzleState: PuzzleState, clipToNeighbors
     }
   });
 
-  // 2. Pre-calculate all connector paths using ORIGINAL boundaries
-  const calculatedConnectors = Object.values(connectors).map(c => {
+  // 2. Pre-calculate all connector paths using ORIGINAL boundaries (skip disabled connectors)
+  const calculatedConnectors = Object.values(connectors).filter(c => !c.disabled).map(c => {
     const parentPiece = originalPiecePaths[c.pieceId];
     if (!parentPiece) return null;
 
@@ -59,7 +59,9 @@ export function processProductionState(puzzleState: PuzzleState, clipToNeighbors
         c.headScale,
         c.headRotationDeg,
         c.useEquidistantHeadPoint,
-        puzzleState.whimsies
+        puzzleState.whimsies,
+        c.jitter,
+        c.jitterSeed || 0
       );
 
       const connectorPath = new paper.CompoundPath({
@@ -112,10 +114,13 @@ export function processProductionState(puzzleState: PuzzleState, clipToNeighbors
 
     // Subtract from neighbors
     if (!clipToNeighbors) {
-      // Subtract from EVERY other piece (Default)
+      // Subtract from EVERY other piece (Default), using bbox pre-filter
+      const connectorBounds = connectorToUse.bounds;
       Object.keys(piecePaths).forEach(otherId => {
         if (otherId === c.pieceId) return;
         const otherPiece = piecePaths[otherId];
+        // Fast reject: skip if bounding boxes don't intersect
+        if (!otherPiece.bounds.intersects(connectorBounds)) return;
         const subtracted = otherPiece.subtract(connectorToUse);
         otherPiece.remove();
         piecePaths[otherId] = cleanPath(subtracted);

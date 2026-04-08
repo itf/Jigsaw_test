@@ -5,7 +5,8 @@ import { ProductionArea } from './processProduction';
  * Merges small areas (below a threshold) with their neighbor that shares the longest boundary.
  */
 export function mergeSmallAreas(areas: ProductionArea[], threshold: number): ProductionArea[] {
-  const nextAreas = [...areas];
+  // First, remove any areas with zero or negative size
+  let nextAreas = areas.filter(area => area.area > 0);
   let stateChanged = true;
 
   // We loop until no more merges can be made (or we hit a limit)
@@ -24,7 +25,8 @@ export function mergeSmallAreas(areas: ProductionArea[], threshold: number): Pro
           // Unite the paths
           const p1 = new paper.CompoundPath({ pathData: area.pathData, insert: false });
           const p2 = new paper.CompoundPath({ pathData: neighbor.pathData, insert: false });
-          const united = p1.unite(p2);
+          // unite then subtracting intersect is redundant, but makes paper js work much better
+          const united = p1.unite(p2).subtract((p1.intersect(p2,{insert:false})), {insert:false});
           
           // Update neighbor
           nextAreas[neighborIndex] = {
@@ -56,21 +58,21 @@ export function mergeSmallAreas(areas: ProductionArea[], threshold: number): Pro
  */
 function findBestNeighbor(area: ProductionArea, allAreas: ProductionArea[], currentIndex: number): number {
   const path = new paper.CompoundPath({ pathData: area.pathData, insert: false });
-  
+
   // Expand the path slightly to find neighbors
   // We'll use a simple trick: check points along the boundary and see which neighbor contains them
   const steps = 20;
   const neighborHits: Record<number, number> = {};
-  
+
   // We need to find the outer path for sampling points
-  const sourcePath = (path instanceof paper.CompoundPath 
-    ? (path.children.find(c => (c as paper.Path).clockwise) || path.children[0]) 
+  const sourcePath = (path instanceof paper.CompoundPath
+    ? (path.children.find(c => (c as paper.Path).clockwise) || path.children[0])
     : path) as paper.Path;
 
   for (let i = 0; i < steps; i++) {
     const pt = sourcePath.getPointAt(sourcePath.length * (i / steps));
     const normal = sourcePath.getNormalAt(sourcePath.length * (i / steps));
-    
+
     // Look slightly outside
     if (!pt || !normal) continue;
     
