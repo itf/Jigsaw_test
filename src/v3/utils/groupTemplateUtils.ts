@@ -1,6 +1,5 @@
 import paper from 'paper';
 import { Area, AreaType, Connector, Whimsy } from '../types';
-import { GroupTemplate } from '../types/groupTemplateTypes';
 import { cleanPath } from './paperUtils';
 import { findNeighborPiece, generateConnectorPath } from './connectorUtils';
 import { getDisconnectedComponents } from './puzzleValidation';
@@ -67,8 +66,6 @@ export function computeGroupBoundary(
  * Applies connector geometry to the group boundary, mirroring processProductionState():
  *   - Connectors owned by group pieces that point outward → united into boundary
  *   - Connectors owned by non-group pieces that point into the group → subtracted from boundary
- *
- * Uses originalPiecePaths (unmodified) to generate connector paths, same as production does.
  */
 function applyConnectorsToBoundary(
   boundary: paper.PathItem,
@@ -78,7 +75,6 @@ function applyConnectorsToBoundary(
   whimsies: Whimsy[],
   includeNonAdjacent: boolean
 ): paper.PathItem {
-  // Snapshot original piece boundaries before any modification (mirrors production pattern)
   const originalPiecePaths: Record<string, paper.PathItem> = {};
   for (const id of Object.keys(areas)) {
     if (areas[id]?.type === AreaType.PIECE) {
@@ -86,7 +82,6 @@ function applyConnectorsToBoundary(
     }
   }
 
-  // Pre-compute all connector paths using original boundaries
   interface CalcConnector {
     connector: Connector;
     path: paper.PathItem;
@@ -121,7 +116,6 @@ function applyConnectorsToBoundary(
         insert: false
       });
 
-      // Determine neighbor using original source path
       const sourcePath = (parentPath instanceof paper.CompoundPath
         ? parentPath.children[connector.pathIndex]
         : parentPath) as paper.Path;
@@ -135,42 +129,32 @@ function applyConnectorsToBoundary(
     }
   }
 
-  // Apply unions (outward) and subtractions (inward)
   for (const { connector, path, neighborId } of calculated) {
     const ownedByGroup = pieceIdSet.has(connector.pieceId);
 
     if (ownedByGroup) {
-      // Outward connector: neighbor is outside the group (or no neighbor)
       const neighborInGroup = neighborId && pieceIdSet.has(neighborId);
       if (!neighborInGroup) {
         const united = boundary.unite(path, { insert: false });
         boundary.remove();
         boundary = cleanPath(united);
       }
-      // Internal connectors (both endpoints in group) are ignored
     } else {
-      // Connector owned by a non-group piece — check if it points into the group
       const neighborInGroup = neighborId && pieceIdSet.has(neighborId);
-
       if (neighborInGroup) {
-        // Direct neighbor is in the group → subtract
         const subtracted = boundary.subtract(path, { insert: false });
         boundary.remove();
         boundary = cleanPath(subtracted);
-      } else if (includeNonAdjacent) {
-        // Non-adjacent mode: subtract if bounding boxes overlap
-        if (path.bounds.intersects(boundary.bounds)) {
-          const subtracted = boundary.subtract(path, { insert: false });
-          boundary.remove();
-          boundary = cleanPath(subtracted);
-        }
+      } else if (includeNonAdjacent && path.bounds.intersects(boundary.bounds)) {
+        const subtracted = boundary.subtract(path, { insert: false });
+        boundary.remove();
+        boundary = cleanPath(subtracted);
       }
     }
 
     path.remove();
   }
 
-  // Cleanup snapshots
   for (const p of Object.values(originalPiecePaths)) {
     p.remove();
   }
@@ -180,10 +164,8 @@ function applyConnectorsToBoundary(
 
 /**
  * Recursively collects all leaf PIECE descendants of an area.
- * If the area is itself a PIECE, returns [id].
- * If it's a GROUP, recurses into children.
  */
-function collectLeafPieceIds(id: string, areas: Record<string, Area>): string[] {
+export function collectLeafPieceIds(id: string, areas: Record<string, Area>): string[] {
   const area = areas[id];
   if (!area) return [];
   if (area.type === AreaType.PIECE) return [id];
@@ -191,64 +173,46 @@ function collectLeafPieceIds(id: string, areas: Record<string, Area>): string[] 
 }
 
 /**
- * Refreshes a template's cached boundary from the current state of its source pieces.
- * If a source piece has been subdivided into a GROUP, its leaf PIECE descendants are used instead.
- * Captures the old boundary path data so callers can compute the delta for instance updates.
- *
- * Returns { updated template, oldBoundaryPathData } or null if source pieces are gone.
+ * Refreshes a stamp-source GROUP area's cached boundary from its current leaf pieces.
+ * If a child piece has been subdivided into a GROUP, its leaf PIECE descendants are used.
+ * Returns the new pathData and old pathData, or null if no valid pieces remain.
  */
-export function refreshTemplateCache(
-  template: GroupTemplate,
+export function refreshStampCache(
+  sourceGroup: Area,
   areas: Record<string, Area>,
   connectors: Record<string, Connector>,
   whimsies: Whimsy[]
-): { template: GroupTemplate; oldBoundaryPathData: string } | null {
-  // Resolve each source piece ID to its current leaf PIECE descendants
-  const validIds = template.sourcePieceIds
-    .flatMap(id => areas[id] ? collectLeafPieceIds(id, areas) : [])
-    .filter((id, i, arr) => arr.indexOf(id) === i); // deduplicate
+): { pathData: string; bounds: { x: number; y: number; width: number; height: number }; oldPathData: string } | null {
+  const leafIds = sourceGroup.children
+    .flatMap(id => (areas[id] ? collectLeafPieceIds(id, areas) : []))
+    .filter((id, i, arr) => arr.indexOf(id) === i);
 
-  if (validIds.length === 0) return null;
+  if (leafIds.length === 0) return null;
 
   const { pathData, boundary } = computeGroupBoundary(
-    validIds,
+    leafIds,
     areas,
     connectors,
     whimsies,
-    template.includeNonAdjacentConnectors
+    sourceGroup.includeNonAdjacentConnectors
   );
 
-  const bounds = boundary.bounds;
-  const templateBounds = {
-    x: bounds.x,
-    y: bounds.y,
-    width: bounds.width,
-    height: bounds.height
-  };
-
+  const b = boundary.bounds;
+  const bounds = { x: b.x, y: b.y, width: b.width, height: b.height };
   boundary.remove();
 
-  const oldBoundaryPathData = template.cachedBoundaryPathData;
-
   return {
-    template: {
-      ...template,
-      sourcePieceIds: validIds,
-      cachedBoundaryPathData: pathData,
-      bounds: templateBounds
-    },
-    oldBoundaryPathData
+    pathData,
+    bounds,
+    oldPathData: sourceGroup.cachedBoundaryPathData ?? ''
   };
 }
 
 /**
- * Updates the children of a subdivided group instance when the template boundary changes.
+ * Updates the children of a subdivided STAMP instance when the source boundary changes.
  *
- * Strategy:
- *   1. Clip all existing child pieces to the new boundary (preserves user's subdivision work)
- *   2. Compute the delta (new area not in old boundary) and add each disjoint part as a new child piece
- *
- * Returns updated areas map and the IDs of newly created delta pieces.
+ * 1. Clips existing child pieces to the new boundary (preserves subdivision work)
+ * 2. Adds delta regions (new area not in old boundary) as new child pieces
  */
 export function updateInstanceForNewBoundary(
   instanceArea: Area,
@@ -260,7 +224,6 @@ export function updateInstanceForNewBoundary(
   const newPieceIds: string[] = [];
   const survivingChildIds: string[] = [];
 
-  // Step 1: Clip existing children to new boundary
   for (const childId of instanceArea.children) {
     const child = areas[childId];
     if (!child || child.type !== AreaType.PIECE) continue;
@@ -269,57 +232,40 @@ export function updateInstanceForNewBoundary(
     const components = getDisconnectedComponents(clipped);
     clipped.remove();
 
-    // Filter out empty/degenerate components
-    const validComponents = components.filter(c => {
-      const area = Math.abs((c as any).area ?? 0);
-      return area > 0.1;
-    });
+    const validComponents = components.filter(c => Math.abs((c as any).area ?? 0) > 0.1);
 
     if (validComponents.length === 0) {
-      // Child fully removed — delete it
       delete updatedAreas[childId];
-      validComponents.forEach(c => c.remove());
       continue;
     }
 
-    if (validComponents.length === 1) {
-      // Child clipped but still one piece — update boundary in-place
-      updatedAreas[childId] = { ...child, boundary: validComponents[0] };
-      survivingChildIds.push(childId);
-    } else {
-      // Child split into multiple parts — first part reuses existing ID, rest get new IDs
-      updatedAreas[childId] = { ...child, boundary: validComponents[0] };
-      survivingChildIds.push(childId);
+    updatedAreas[childId] = { ...child, boundary: validComponents[0] };
+    survivingChildIds.push(childId);
 
-      for (let i = 1; i < validComponents.length; i++) {
-        const newId = `${childId}-split-${i}-${Math.random().toString(36).slice(2, 6)}`;
-        updatedAreas[newId] = {
-          ...child,
-          id: newId,
-          boundary: validComponents[i]
-        };
-        survivingChildIds.push(newId);
-        newPieceIds.push(newId);
-      }
+    for (let i = 1; i < validComponents.length; i++) {
+      const newId = `${childId}-split-${i}-${Math.random().toString(36).slice(2, 6)}`;
+      updatedAreas[newId] = {
+        ...child,
+        id: newId,
+        boundary: validComponents[i]
+      };
+      survivingChildIds.push(newId);
+      newPieceIds.push(newId);
     }
   }
 
-  // Step 2: Compute delta — new area not covered by old boundary
+  // Delta: new area not in old boundary
   const delta = newBoundaryPath.subtract(oldBoundaryPath, { insert: false });
   const deltaComponents = getDisconnectedComponents(delta);
   delta.remove();
 
   for (const comp of deltaComponents) {
-    const area = Math.abs((comp as any).area ?? 0);
-    if (area < 0.1) {
-      comp.remove();
-      continue;
-    }
+    if (Math.abs((comp as any).area ?? 0) < 0.1) { comp.remove(); continue; }
 
     const newId = `delta-${instanceArea.id}-${Math.random().toString(36).slice(2, 6)}`;
     updatedAreas[newId] = {
       id: newId,
-      parentId: instanceArea.id,
+      groupMemberships: [instanceArea.id],
       type: AreaType.PIECE,
       children: [],
       boundary: comp,
@@ -329,17 +275,13 @@ export function updateInstanceForNewBoundary(
     newPieceIds.push(newId);
   }
 
-  // Update the instance's children list
-  updatedAreas[instanceArea.id] = {
-    ...instanceArea,
-    children: survivingChildIds
-  };
+  updatedAreas[instanceArea.id] = { ...instanceArea, children: survivingChildIds };
 
   return { updatedAreas, newPieceIds };
 }
 
 /**
- * Applies a GroupInstance transform to a Paper.js PathItem.
+ * Applies a stamp transform to a Paper.js PathItem.
  * Returns a new (cloned + transformed) PathItem.
  */
 export function applyInstanceTransform(
@@ -362,84 +304,54 @@ export function applyInstanceTransform(
 }
 
 /**
- * Validates that a target boundary matches a template boundary within tolerance.
- * Uses symmetric difference area — if it's near zero, the shapes match.
- */
-export function validateTemplatePlacement(
-  templateBoundary: paper.PathItem,
-  targetBoundary: paper.PathItem,
-  tolerance: number = 1.0
-): boolean {
-  // Symmetric difference = (A unite B) subtract (A intersect B)
-  const union = templateBoundary.unite(targetBoundary, { insert: false });
-  const intersection = templateBoundary.intersect(targetBoundary, { insert: false });
-  const symDiff = union.subtract(intersection, { insert: false });
-
-  const diffArea = Math.abs((symDiff as any).area || 0);
-
-  symDiff.remove();
-  union.remove();
-  intersection.remove();
-
-  return diffArea < tolerance;
-}
-
-/**
- * Subtracts all group instance boundaries from overlapping non-instance pieces.
+ * Subtracts all STAMP instance boundaries from overlapping non-stamp PIECE areas.
  * Used during production processing only.
- *
- * Returns updated piece paths map.
  */
-export function subtractGroupInstancesFromPieces(
+export function subtractStampsFromPieces(
   piecePaths: Record<string, paper.PathItem>,
-  areas: Record<string, Area>,
-  groupTemplates: Record<string, GroupTemplate>
+  areas: Record<string, Area>
 ): Record<string, paper.PathItem> {
-  // Collect all group instance area IDs and their child piece IDs
-  const instancePieceIds = new Set<string>();
-  const instanceBoundaries: paper.PathItem[] = [];
+  const stampPieceIds = new Set<string>();
+  const stampBoundaries: paper.PathItem[] = [];
 
   for (const area of Object.values(areas)) {
-    if (!area.groupInstance) continue;
+    if (area.type !== AreaType.STAMP) continue;
+    if (!area.stampSource) continue;
 
-    const template = groupTemplates[area.groupInstance.templateId];
-    if (!template) continue;
+    const sourceGroup = areas[area.stampSource.sourceGroupId];
+    if (!sourceGroup?.cachedBoundaryPathData) continue;
 
-    // Collect all child pieces of this instance (if subdivided)
-    if (area.type === AreaType.GROUP) {
-      const collectChildren = (areaId: string) => {
-        const a = areas[areaId];
-        if (!a) return;
-        if (a.type === AreaType.PIECE) {
-          instancePieceIds.add(areaId);
-        } else {
-          a.children.forEach(collectChildren);
-        }
-      };
+    // Collect all child pieces of this stamp instance
+    const collectChildren = (areaId: string) => {
+      const a = areas[areaId];
+      if (!a) return;
+      if (a.type === AreaType.PIECE) {
+        stampPieceIds.add(areaId);
+      } else {
+        a.children.forEach(collectChildren);
+      }
+    };
+
+    if (area.children.length > 0) {
       area.children.forEach(collectChildren);
     } else {
-      // Not yet subdivided — the instance itself is the piece
-      instancePieceIds.add(area.id);
+      stampPieceIds.add(area.id);
     }
 
-    // Build the instance boundary
     const templateBoundary = new paper.CompoundPath({
-      pathData: template.cachedBoundaryPathData,
+      pathData: sourceGroup.cachedBoundaryPathData,
       insert: false
     });
-    const transformed = applyInstanceTransform(templateBoundary, area.groupInstance.transform);
+    const transformed = applyInstanceTransform(templateBoundary, area.stampSource.transform);
     templateBoundary.remove();
-    instanceBoundaries.push(transformed);
+    stampBoundaries.push(transformed);
   }
 
-  // Subtract each instance boundary from every non-instance piece
-  for (const boundary of instanceBoundaries) {
+  for (const boundary of stampBoundaries) {
     const boundaryBounds = boundary.bounds;
 
     for (const [pieceId, piecePath] of Object.entries(piecePaths)) {
-      if (instancePieceIds.has(pieceId)) continue;
-
-      // Fast reject: skip if bounding boxes don't intersect
+      if (stampPieceIds.has(pieceId)) continue;
       if (!piecePath.bounds.intersects(boundaryBounds)) continue;
 
       const subtracted = piecePath.subtract(boundary, { insert: false });
@@ -448,8 +360,7 @@ export function subtractGroupInstancesFromPieces(
     }
   }
 
-  // Cleanup
-  instanceBoundaries.forEach(b => b.remove());
+  stampBoundaries.forEach(b => b.remove());
 
   return piecePaths;
 }

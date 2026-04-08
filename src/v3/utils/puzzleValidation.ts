@@ -45,30 +45,33 @@ export function validateAndCleanState(areas: Record<string, Area>): Record<strin
       
       if (components.length > 1) {
         stateChanged = true;
-        const parentId = area.parentId;
+        const memberships = area.groupMemberships ?? [];
         const newChildIds: string[] = [];
 
         components.forEach((comp, index) => {
           const newId = `${id}-part-${index}-${Math.random().toString(36).slice(2, 6)}`;
           newChildIds.push(newId);
-          
+
           // Ensure the component is removed from the active project
           comp.remove();
-          
+
           nextAreas[newId] = {
             ...area,
             id: newId,
+            groupMemberships: memberships,
             boundary: comp,
             children: []
           };
         });
 
-        // Update parent's children list
-        if (parentId && nextAreas[parentId]) {
-          nextAreas[parentId] = {
-            ...nextAreas[parentId],
-            children: nextAreas[parentId].children.filter(cid => cid !== id).concat(newChildIds)
-          };
+        // Update all parent groups' children lists
+        for (const groupId of memberships) {
+          if (nextAreas[groupId]) {
+            nextAreas[groupId] = {
+              ...nextAreas[groupId],
+              children: nextAreas[groupId].children.filter(cid => cid !== id).concat(newChildIds)
+            };
+          }
         }
 
         // Remove the original split piece

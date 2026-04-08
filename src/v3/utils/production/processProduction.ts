@@ -3,7 +3,7 @@ import { Area, AreaType, Connector, PuzzleState } from '../../types';
 import { generateConnectorPath, findNeighborPiece } from '../connectorUtils';
 import { cleanPath } from '../paperUtils';
 import { getDisconnectedComponents } from '../puzzleValidation';
-import { subtractGroupInstancesFromPieces } from '../groupTemplateUtils';
+import { subtractStampsFromPieces } from '../groupTemplateUtils';
 
 export interface ProductionArea {
   id: string;
@@ -44,11 +44,9 @@ export function processProductionState(puzzleState: PuzzleState, clipToNeighbors
     }
   });
 
-  // 1b. Subtract group instance boundaries from overlapping non-instance pieces
-  // (instances render as overlays during editing; this is where the boolean subtraction happens)
-  if (Object.keys(puzzleState.groupTemplates).length > 0) {
-    subtractGroupInstancesFromPieces(piecePaths, areas, puzzleState.groupTemplates);
-  }
+  // 1b. Subtract STAMP instance boundaries from overlapping non-stamp pieces
+  // (stamps render as overlays during editing; this is where the boolean subtraction happens)
+  subtractStampsFromPieces(piecePaths, areas);
 
   // 2. Pre-calculate all connector paths using ORIGINAL boundaries (skip disabled connectors)
   const calculatedConnectors = Object.values(connectors).filter(c => !c.disabled).map(c => {

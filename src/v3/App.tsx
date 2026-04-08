@@ -37,9 +37,9 @@ export default function V3App() {
   const [whimsyRotationDeg, setWhimsyRotationDeg] = useState(0);
   const [whimsyPlacementActive, setWhimsyPlacementActive] = useState(false);
 
-  // Group Template Parameters
-  const [groupTemplatePlacementActive, setGroupTemplatePlacementActive] = useState(false);
-  const [activeGroupTemplateId, setActiveGroupTemplateId] = useState<string | null>(null);
+  // Stamp Parameters
+  const [stampPlacementActive, setStampPlacementActive] = useState(false);
+  const [activeStampSourceId, setActiveStampSourceId] = useState<string | null>(null);
 
   // Connection Parameters
   const [connectionT, setConnectionT] = useState(0.5);
@@ -79,7 +79,7 @@ export default function V3App() {
     validateGrid,
     cleanPuzzle,
     reset,
-    groupTemplates: groupTemplateOps
+    stamps: stampOps
   } = usePuzzleEngineV3();
 
   const { areas, connectors, whimsies, width, height } = puzzleState;
@@ -205,29 +205,28 @@ export default function V3App() {
     setWhimsyPlacementActive(false);
   }, [whimsyTemplate, whimsyScale, whimsyRotationDeg, addWhimsy]);
 
-  const handleGroupTemplateCommit = useCallback((p: Point) => {
-    if (!activeGroupTemplateId) return;
-    const template = groupTemplateOps.groupTemplates[activeGroupTemplateId];
-    if (!template) return;
-    
-    // Offset the position to account for centering: the cursor is at the center of the template
-    // So we need to translate back to the top-left corner of the template
-    const adjustedX = p.x - template.bounds.x - template.bounds.width / 2;
-    const adjustedY = p.y - template.bounds.y - template.bounds.height / 2;
-    
-    groupTemplateOps.placeGroupTemplate(activeGroupTemplateId, puzzleState.rootAreaId, {
-      translateX: adjustedX, 
-      translateY: adjustedY, 
-      rotation: 0, 
+  const handleStampCommit = useCallback((p: Point) => {
+    if (!activeStampSourceId) return;
+    const src = areas[activeStampSourceId];
+    if (!src?.cachedBoundaryPathData) return;
+
+    const bounds = src.cachedBounds ?? { x: 0, y: 0, width: 100, height: 100 };
+    const adjustedX = p.x - bounds.x - bounds.width / 2;
+    const adjustedY = p.y - bounds.y - bounds.height / 2;
+
+    stampOps.placeStamp(activeStampSourceId, puzzleState.rootAreaId, {
+      translateX: adjustedX,
+      translateY: adjustedY,
+      rotation: 0,
       flipX: false
     });
-    setGroupTemplatePlacementActive(false);
-    setActiveGroupTemplateId(null);
-  }, [activeGroupTemplateId, groupTemplateOps, puzzleState.rootAreaId]);
+    setStampPlacementActive(false);
+    setActiveStampSourceId(null);
+  }, [activeStampSourceId, areas, stampOps, puzzleState.rootAreaId]);
 
-  const handleGroupTemplateCancelPlacement = useCallback(() => {
-    setGroupTemplatePlacementActive(false);
-    setActiveGroupTemplateId(null);
+  const handleStampCancelPlacement = useCallback(() => {
+    setStampPlacementActive(false);
+    setActiveStampSourceId(null);
   }, []);
 
   const handlePieceClick = useCallback((id: string | null, pt?: Point) => {
@@ -407,15 +406,14 @@ export default function V3App() {
         }}
         massHeadIds={massHeadIds}
         setMassHeadIds={setMassHeadIds}
-        groupTemplates={groupTemplateOps.groupTemplates}
-        onCreateGroupTemplate={groupTemplateOps.createGroupTemplate}
-        onPlaceGroupTemplate={(templateId) => {
-          // Enter placement mode for drag-and-drop placement
-          setActiveGroupTemplateId(templateId);
-          setGroupTemplatePlacementActive(true);
+        areas={areas}
+        onCreateStamp={stampOps.createStamp}
+        onPlaceStamp={(sourceGroupId) => {
+          setActiveStampSourceId(sourceGroupId);
+          setStampPlacementActive(true);
         }}
-        onRemoveGroupTemplate={groupTemplateOps.removeGroupTemplate}
-        onRefreshGroupTemplateCaches={groupTemplateOps.refreshAllTemplateCaches}
+        onDeleteStampSource={stampOps.deleteStampSource}
+        onRefreshStamps={stampOps.refreshAllStamps}
       />
 
       <main className="flex-1 relative overflow-hidden flex flex-col" ref={containerRef}>
@@ -434,10 +432,10 @@ export default function V3App() {
             whimsyScale={whimsyScale}
             whimsyRotationDeg={whimsyRotationDeg}
             onWhimsyCommit={handleWhimsyCommit}
-            groupTemplatePlacementActive={groupTemplatePlacementActive}
-            activeGroupTemplateId={activeGroupTemplateId}
-            onGroupTemplateCommit={handleGroupTemplateCommit}
-            onGroupTemplateCancelPlacement={handleGroupTemplateCancelPlacement}
+            stampPlacementActive={stampPlacementActive}
+            activeStampSourceId={activeStampSourceId}
+            onStampCommit={handleStampCommit}
+            onStampCancelPlacement={handleStampCancelPlacement}
             activeTab={activeTab}
             connectionT={connectionT}
             connectionPathIndex={connectionPathIndex}

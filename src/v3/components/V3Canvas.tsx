@@ -25,10 +25,10 @@ interface V3CanvasProps {
   whimsyScale: number;
   whimsyRotationDeg: number;
   onWhimsyCommit: (p: Point) => void;
-  groupTemplatePlacementActive: boolean;
-  activeGroupTemplateId: string | null;
-  onGroupTemplateCommit: (p: Point) => void;
-  onGroupTemplateCancelPlacement?: () => void;
+  stampPlacementActive: boolean;
+  activeStampSourceId: string | null;
+  onStampCommit: (p: Point) => void;
+  onStampCancelPlacement?: () => void;
   activeTab: string;
   connectionT: number;
   connectionPathIndex: number;
@@ -62,10 +62,10 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
   whimsyScale,
   whimsyRotationDeg,
   onWhimsyCommit,
-  groupTemplatePlacementActive,
-  activeGroupTemplateId,
-  onGroupTemplateCommit,
-  onGroupTemplateCancelPlacement,
+  stampPlacementActive,
+  activeStampSourceId,
+  onStampCommit,
+  onStampCancelPlacement,
   activeTab,
   connectionT,
   connectionPathIndex,
@@ -86,7 +86,7 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
   onRectPoint,
   previewConnectors,
 }) => {
-  const { areas, connectors, whimsies, groupTemplates, width, height } = puzzleState;
+  const { areas, connectors, whimsies, width, height } = puzzleState;
   const outerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -140,23 +140,21 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
   }, []);
 
   const leafPieces = useMemo(() => {
-    const pieces = (Object.values(areas) as Area[]).filter(a => a.type === AreaType.PIECE);
-    // Group instance pieces render on top (non-destructive overlay)
-    const isInstancePiece = (a: Area): boolean => {
-      if (a.groupInstance) return true;
-      // Check if any ancestor is a group instance
-      let current = a;
-      while (current.parentId) {
-        const parent = areas[current.parentId];
-        if (!parent) break;
-        if (parent.groupInstance) return true;
-        current = parent;
+    const pieces = (Object.values(areas) as Area[]).filter(a => a.type === AreaType.PIECE || a.type === AreaType.STAMP);
+    // STAMP areas and their children render on top (non-destructive overlay)
+    const isStampPiece = (a: Area): boolean => {
+      if (a.type === AreaType.STAMP) return true;
+      if (a.stampSource) return true;
+      // Check if any group membership is a STAMP
+      for (const gId of (a.groupMemberships ?? [])) {
+        const g = areas[gId];
+        if (g?.type === AreaType.STAMP || g?.stampSource) return true;
       }
       return false;
     };
     return pieces.sort((a, b) => {
-      const aInstance = isInstancePiece(a) ? 1 : 0;
-      const bInstance = isInstancePiece(b) ? 1 : 0;
+      const aInstance = isStampPiece(a) ? 1 : 0;
+      const bInstance = isStampPiece(b) ? 1 : 0;
       return aInstance - bInstance;
     });
   }, [areas]);
@@ -304,7 +302,7 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
     }
 
     const boardPt = clientToBoard(clientX, clientY);
-    if (whimsyPlacementActive || groupTemplatePlacementActive || rectSelectMode) {
+    if (whimsyPlacementActive || stampPlacementActive || rectSelectMode) {
       setMousePos(boardPt);
     }
     if (isDraggingNewHandler && connectionData) {
@@ -318,7 +316,7 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
         onConnectorUpdate(draggingConnectorId, { midT: t, pathIndex });
       }
     }
-  }, [whimsyPlacementActive, groupTemplatePlacementActive, rectSelectMode, isDraggingNewHandler, draggingConnectorId, connectionData, renderedConnectors, clientToBoard, onConnectionUpdate, onConnectorUpdate]);
+  }, [whimsyPlacementActive, stampPlacementActive, rectSelectMode, isDraggingNewHandler, draggingConnectorId, connectionData, renderedConnectors, clientToBoard, onConnectionUpdate, onConnectorUpdate]);
 
   const handleMouseUp = useCallback(() => {
     setIsDraggingNewHandler(false);
@@ -344,15 +342,15 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (groupTemplatePlacementActive && onGroupTemplateCancelPlacement) {
+        if (stampPlacementActive && onStampCancelPlacement) {
           e.preventDefault();
-          onGroupTemplateCancelPlacement();
+          onStampCancelPlacement();
         }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [groupTemplatePlacementActive, onGroupTemplateCancelPlacement]);
+  }, [stampPlacementActive, onStampCancelPlacement]);
 
   return (
     <div 
@@ -407,13 +405,12 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
             const isSelected = selectedIds.includes(piece.id);
             const isHovered = hoveredId === piece.id;
             const isNeighbor = connectionData?.neighborId === piece.id;
-            // Check if this piece belongs to a group instance (overlay)
+            // Check if this piece belongs to a STAMP instance (overlay)
             const isGroupInstancePiece = (() => {
-              if (piece.groupInstance) return true;
-              let current: Area | undefined = piece;
-              while (current?.parentId) {
-                current = areas[current.parentId];
-                if (current?.groupInstance) return true;
+              if (piece.type === AreaType.STAMP || piece.stampSource) return true;
+              for (const gId of (piece.groupMemberships ?? [])) {
+                const g = areas[gId];
+                if (g?.type === AreaType.STAMP || g?.stampSource) return true;
               }
               return false;
             })();
@@ -695,41 +692,37 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
             />
           )}
 
-          {/* Group Template Preview */}
-          {groupTemplatePlacementActive && activeGroupTemplateId && groupTemplates[activeGroupTemplateId] && (
-            <g 
-              className="pointer-events-none" 
-              transform={`translate(${mousePos.x - groupTemplates[activeGroupTemplateId].bounds.x - groupTemplates[activeGroupTemplateId].bounds.width / 2}, ${mousePos.y - groupTemplates[activeGroupTemplateId].bounds.y - groupTemplates[activeGroupTemplateId].bounds.height / 2})`}
-            >
-              <path
-                d={groupTemplates[activeGroupTemplateId].cachedBoundaryPathData}
-                fill="rgba(124, 58, 247, 0.15)"
-                stroke="rgba(109, 40, 217, 0.8)"
-                strokeWidth={2}
-                strokeLinejoin="round"
-                fillRule="evenodd"
-              />
-            </g>
-          )}
-
-          {/* Group Template Placement Overlay */}
-          {groupTemplatePlacementActive && (
-            <rect
-              width={width}
-              height={height}
-              fill="transparent"
-              className="cursor-crosshair"
-              style={{ pointerEvents: 'all' }}
-              onMouseMove={(e) => {
-                setMousePos(clientToBoard(e.clientX, e.clientY));
-              }}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                onGroupTemplateCommit(clientToBoard(e.clientX, e.clientY));
-              }}
-            />
-          )}
+          {/* Stamp Placement Preview */}
+          {stampPlacementActive && activeStampSourceId && areas[activeStampSourceId]?.cachedBoundaryPathData && (() => {
+            const src = areas[activeStampSourceId];
+            const previewBounds = src.cachedBounds ?? { x: 0, y: 0, width: 100, height: 100 };
+            return (
+              <>
+                <g
+                  className="pointer-events-none"
+                  transform={`translate(${mousePos.x - previewBounds.x - previewBounds.width / 2}, ${mousePos.y - previewBounds.y - previewBounds.height / 2})`}
+                >
+                  <path
+                    d={src.cachedBoundaryPathData}
+                    fill="rgba(124, 58, 247, 0.15)"
+                    stroke="rgba(109, 40, 217, 0.8)"
+                    strokeWidth={2}
+                    strokeLinejoin="round"
+                    fillRule="evenodd"
+                  />
+                </g>
+                <rect
+                  width={width}
+                  height={height}
+                  fill="transparent"
+                  className="cursor-crosshair"
+                  style={{ pointerEvents: 'all' }}
+                  onMouseMove={(e) => setMousePos(clientToBoard(e.clientX, e.clientY))}
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); onStampCommit(clientToBoard(e.clientX, e.clientY)); }}
+                />
+              </>
+            );
+          })()}
         </svg>
       </div>
 

@@ -5,8 +5,8 @@ import { WheelSlider } from './ui/WheelSlider';
 import { WhimsyLibrary } from './WhimsyLibrary';
 import { Whimsy } from '../types';
 import { V3MassConnectionTab } from './V3MassConnectionTab';
-import { GroupTemplatePanel } from './GroupTemplatePanel';
-import { GroupTemplate } from '../types/groupTemplateTypes';
+import { StampPanel } from './StampPanel';
+import { Area } from '../types';
 
 interface V3ActionBarProps {
   activeTab: Tab;
@@ -74,12 +74,12 @@ interface V3ActionBarProps {
   onToggleRectSelect: () => void;
   massHeadIds: string[];
   setMassHeadIds: (ids: string[]) => void;
-  // Group template props
-  groupTemplates: Record<string, GroupTemplate>;
-  onCreateGroupTemplate: (name: string, pieceIds: string[], includeNonAdjacentConnectors: boolean) => void;
-  onPlaceGroupTemplate: (templateId: string) => void;
-  onRemoveGroupTemplate: (templateId: string) => void;
-  onRefreshGroupTemplateCaches: () => void;
+  // Stamp props
+  areas: Record<string, Area>;
+  onCreateStamp: (name: string, pieceIds: string[], includeNonAdjacentConnectors: boolean) => void;
+  onPlaceStamp: (sourceGroupId: string) => void;
+  onDeleteStampSource: (sourceGroupId: string, mode: 'delete' | 'convert') => void;
+  onRefreshStamps: () => void;
 }
 
 const Label: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -162,15 +162,15 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
   onToggleRectSelect,
   massHeadIds,
   setMassHeadIds,
-  groupTemplates,
-  onCreateGroupTemplate,
-  onPlaceGroupTemplate,
-  onRemoveGroupTemplate,
-  onRefreshGroupTemplateCaches,
+  areas,
+  onCreateStamp,
+  onPlaceStamp,
+  onDeleteStampSource,
+  onRefreshStamps,
 }) => {
   const [showWhimsyLibrary, setShowWhimsyLibrary] = useState(false);
   const [libraryMode, setLibraryMode] = useState<'WHIMSY' | 'CONNECTOR'>('WHIMSY');
-  const [showGroupTemplatePanel, setShowGroupTemplatePanel] = useState(false);
+  const [showStampPanel, setShowStampPanel] = useState(false);
 
   const canSubdivide = selectedIds.length > 0;
 
@@ -389,15 +389,15 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
             <Divider />
 
             <button
-              onClick={() => setShowGroupTemplatePanel(prev => !prev)}
+              onClick={() => setShowStampPanel(prev => !prev)}
               className={`flex items-center gap-1.5 h-7 px-3 rounded-lg text-[10px] font-bold transition-colors ${
-                showGroupTemplatePanel
+                showStampPanel
                   ? 'bg-violet-600 text-white'
                   : 'bg-violet-50 text-violet-600 hover:bg-violet-100'
               }`}
             >
               <Copy className="w-3 h-3" />
-              Groups ({Object.keys(groupTemplates).length})
+              Stamps ({(Object.values(areas) as Area[]).filter(a => a.stampName).length})
             </button>
           </>
         )}
@@ -573,16 +573,16 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
         </div>
       )}
 
-      {/* Group Template Panel Popover */}
-      {showGroupTemplatePanel && activeTab === 'MODIFICATION' && (
+      {/* Stamp Panel Popover */}
+      {showStampPanel && activeTab === 'MODIFICATION' && (
         <div className="absolute top-full left-4 mt-2 z-50 shadow-2xl">
-          <GroupTemplatePanel
-            groupTemplates={groupTemplates}
+          <StampPanel
+            areas={areas}
             selectedIds={selectedIds}
-            onCreateTemplate={onCreateGroupTemplate}
-            onPlaceTemplate={onPlaceGroupTemplate}
-            onRemoveTemplate={onRemoveGroupTemplate}
-            onRefreshCaches={onRefreshGroupTemplateCaches}
+            onCreateStamp={onCreateStamp}
+            onPlaceStamp={onPlaceStamp}
+            onDeleteStampSource={onDeleteStampSource}
+            onRefreshStamps={onRefreshStamps}
           />
         </div>
       )}

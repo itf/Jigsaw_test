@@ -23,19 +23,10 @@ export function pathItemFromBoundaryData(data: string): paper.PathItem {
  * Reset the active Paper.js project.
  */
 export function resetPaperProject(width: number, height: number) {
-  try {
-    if (paper.project) {
-      paper.project.remove();
-    }
-    // Create a hidden canvas if we're in a browser but no canvas is provided
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    paper.setup(canvas);
-  } catch (e) {
-    console.warn('Paper.js setup failed, falling back to headless mode:', e);
-    paper.setup(new paper.Size(width, height));
-  }
+  // Create a new active project without removing the old one.
+  // Path objects stored in React state are tied to their originating project;
+  // removing that project would orphan them and break .clone() / boolean ops.
+  paper.setup(new paper.Size(width, height));
 }
 
 /**

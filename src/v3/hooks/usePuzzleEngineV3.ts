@@ -7,16 +7,15 @@ import { generateGridPoints, generateHexGridPoints, generateRandomPoints } from 
 import { getWhimsyTemplatePathData, WhimsyTemplateId } from '../utils/whimsyGallery';
 import { validateAndCleanState } from '../utils/puzzleValidation';
 import { findNeighborPiece, generateConnectorPath } from '../utils/connectorUtils';
-import { useGroupTemplates } from './useGroupTemplates';
+import { useStamps } from './useStamps';
 
 const COLORS = [
-  '#f87171', '#fb923c', '#fbbf24', '#facc15', '#a3e635', '#4ade80', 
-  '#34d399', '#2dd4bf', '#22d3ee', '#38bdf8', '#60a5fa', '#818cf8', 
+  '#f87171', '#fb923c', '#fbbf24', '#facc15', '#a3e635', '#4ade80',
+  '#34d399', '#2dd4bf', '#22d3ee', '#38bdf8', '#60a5fa', '#818cf8',
   '#a78bfa', '#c084fc', '#e879f9', '#f472b6', '#fb7185'
 ];
 
 function generateSafeRandomColor(): string {
-  // Generate a color that is not too dark (< 50) or too light (> 240)
   const r = Math.floor(Math.random() * 190) + 50;
   const g = Math.floor(Math.random() * 190) + 50;
   const b = Math.floor(Math.random() * 190) + 50;
@@ -25,12 +24,11 @@ function generateSafeRandomColor(): string {
 
 function getNeighborColors(areas: Record<string, Area>, boundary: paper.PathItem, excludeIds: string[] = []): Set<string> {
   const neighborColors = new Set<string>();
-  
+
   Object.values(areas).forEach(other => {
     if (excludeIds.includes(other.id) || other.type !== AreaType.PIECE) return;
-    
+
     const otherPath = other.boundary;
-    // Check for intersection or very close proximity
     if (boundary.intersects(otherPath)) {
       neighborColors.add(other.color);
     } else {
@@ -82,8 +80,7 @@ export function usePuzzleEngineV3(): {
   validateGrid: () => void;
   cleanPuzzle: () => void;
   reset: () => void;
-  // Group template operations
-  groupTemplates: ReturnType<typeof useGroupTemplates>;
+  stamps: ReturnType<typeof useStamps>;
 } {
   const [areas, setAreas] = useState<Record<string, Area>>({});
   const [connectors, setConnectors] = useState<Record<string, Connector>>({});
@@ -97,7 +94,7 @@ export function usePuzzleEngineV3(): {
     { id: 'triangle', name: 'Triangle', svgData: getWhimsyTemplatePathData('triangle'), category: 'Basic' },
   ]);
 
-  const groupTemplateOps = useGroupTemplates(areas, setAreas, connectors, setConnectors, whimsies, width, height);
+  const stampOps = useStamps(areas, setAreas, connectors, setConnectors, whimsies, width, height);
 
   const createRoot = useCallback((w: number, h: number) => {
     console.log('usePuzzleEngineV3: createRoot', w, h);
@@ -108,11 +105,11 @@ export function usePuzzleEngineV3(): {
       size: [w, h],
       insert: false
     });
-    
+
     const newAreas: Record<string, Area> = {
       [id]: {
         id,
-        parentId: null,
+        groupMemberships: [],
         type: AreaType.PIECE,
         children: [],
         boundary,
@@ -128,11 +125,7 @@ export function usePuzzleEngineV3(): {
 
   const subdivideGrid = useCallback((params: { parentId: string, pattern: string, rows: number, cols: number, count: number, jitter: number }) => {
     const { parentId, pattern, rows, cols, count, jitter } = params;
-    
-    const isGroupInstance = (parentId: string, currentAreas: Record<string, Area>) => {
-      return currentAreas[parentId]?.groupInstance !== undefined;
-    };
-    
+
     setAreas(prev => {
       const parent = prev[parentId];
       if (!parent || parent.type !== AreaType.PIECE) return prev;
@@ -140,11 +133,10 @@ export function usePuzzleEngineV3(): {
       resetPaperProject(width, height);
       const parentPath = parent.boundary.clone();
       const bounds = parentPath.bounds;
-      
+
       const nextAreas = { ...prev };
       const childIds: string[] = [];
 
-      // Special case for perfect rectangular grid
       if (pattern === 'GRID' && jitter === 0) {
         const dx = bounds.width / cols;
         const dy = bounds.height / rows;
@@ -162,15 +154,13 @@ export function usePuzzleEngineV3(): {
             if (!clipped.isEmpty()) {
               const childId = `${parentId}-child-${r}-${c}-${Math.random().toString(36).slice(2, 6)}`;
               childIds.push(childId);
-              clipped.remove(); // Keep it out of the active project
-              
-              // Color picking: check against all existing pieces (except the parent being split)
-              // and also against already created children in this batch.
+              clipped.remove();
+
               const neighborColors = getNeighborColors(nextAreas, clipped, [parentId]);
 
               nextAreas[childId] = {
                 id: childId,
-                parentId,
+                groupMemberships: [parentId],
                 type: AreaType.PIECE,
                 children: [],
                 boundary: clipped,
@@ -183,7 +173,6 @@ export function usePuzzleEngineV3(): {
           }
         }
       } else {
-        // Voronoi for organic/jittered grids
         let points: Point[] = [];
         if (pattern === 'GRID') points = generateGridPoints(width, height, rows, cols, jitter, bounds);
         else if (pattern === 'HEX') points = generateHexGridPoints(width, height, rows, cols, jitter, bounds);
@@ -215,13 +204,12 @@ export function usePuzzleEngineV3(): {
             const childId = `${parentId}-child-${i}-${Math.random().toString(36).slice(2, 6)}`;
             childIds.push(childId);
             clipped.remove();
-            
-            // For Voronoi, check against all other pieces and new children
+
             const neighborColors = getNeighborColors(nextAreas, clipped, [parentId]);
 
             nextAreas[childId] = {
               id: childId,
-              parentId,
+              groupMemberships: [parentId],
               type: AreaType.PIECE,
               children: [],
               boundary: clipped,
@@ -235,17 +223,12 @@ export function usePuzzleEngineV3(): {
       }
 
       parentPath.remove();
-      
+
       nextAreas[parentId] = {
         ...parent,
         type: AreaType.GROUP,
         children: childIds
       };
-
-      // After updating areas, if this is a group instance, mark it for materialization
-      if (isGroupInstance(parentId, nextAreas)) {
-        (nextAreas as any).__pendingMaterializationId = parentId;
-      }
 
       return nextAreas;
     });
@@ -260,7 +243,7 @@ export function usePuzzleEngineV3(): {
 
       resetPaperProject(width, height);
       const nextAreas = { ...prev };
-      
+
       const toMerge = [...validIds];
       const mergedResults: Area[] = [];
 
@@ -269,9 +252,10 @@ export function usePuzzleEngineV3(): {
         const startArea = nextAreas[startId];
         let currentPath = startArea.boundary.clone();
         let currentColor = startArea.color;
-        let currentParentId = startArea.parentId;
+        // Use first piece's groupMemberships for the merged result
+        const currentMemberships = startArea.groupMemberships;
         const mergedIds = [startId];
-        
+
         let foundAny = true;
         while (foundAny) {
           foundAny = false;
@@ -279,15 +263,13 @@ export function usePuzzleEngineV3(): {
             const otherId = toMerge[i];
             const otherArea = nextAreas[otherId];
             const otherPath = otherArea.boundary.clone();
-            
+
             const pA = currentPath.getNearestPoint(otherPath.bounds.center);
             const pB = otherPath.getNearestPoint(pA);
             const dist = pA.getDistance(pB);
-            
+
             if (currentPath.intersects(otherPath) || dist < 2) {
-              // In theory, unite then subtracting the intersection is completely redundant.
-              // in practice, this makes paper js much more reliable
-              const united = currentPath.unite(otherPath).subtract((currentPath.intersect(otherPath, {insert:false})),  {insert:false});
+              const united = currentPath.unite(otherPath).subtract((currentPath.intersect(otherPath, {insert:false})), {insert:false});
               currentPath.remove();
               currentPath = united;
               mergedIds.push(otherId);
@@ -301,31 +283,31 @@ export function usePuzzleEngineV3(): {
 
         if (mergedIds.length > 1) {
           const newId = `merged-${Math.random().toString(36).slice(2, 6)}`;
-          currentPath.remove(); // Keep it out of project
-          
-          // Find neighbors of the new merged piece to pick a unique color
-          // Exclude the pieces that are being merged
+          currentPath.remove();
+
           const neighborColors = getNeighborColors(nextAreas, currentPath, mergedIds);
 
           const newArea: Area = {
             id: newId,
-            parentId: currentParentId,
+            groupMemberships: currentMemberships,
             type: AreaType.PIECE,
             children: [],
             boundary: currentPath,
             color: pickUniqueColor(neighborColors)
           };
           mergedResults.push(newArea);
-          
-          // Update parent
-          if (currentParentId && nextAreas[currentParentId]) {
-            nextAreas[currentParentId] = {
-              ...nextAreas[currentParentId],
-              children: nextAreas[currentParentId].children.filter(id => !mergedIds.includes(id)).concat(newId)
-            };
+
+          // Update all groups that contained any of the merged pieces
+          const affectedGroupIds = new Set(mergedIds.flatMap(id => nextAreas[id]?.groupMemberships ?? []));
+          for (const groupId of affectedGroupIds) {
+            if (nextAreas[groupId]) {
+              nextAreas[groupId] = {
+                ...nextAreas[groupId],
+                children: nextAreas[groupId].children.filter(id => !mergedIds.includes(id)).concat(newId)
+              };
+            }
           }
-          
-          // Delete old pieces
+
           mergedIds.forEach(id => delete nextAreas[id]);
           nextAreas[newId] = newArea;
         } else {
@@ -339,12 +321,12 @@ export function usePuzzleEngineV3(): {
 
   const addWhimsy = useCallback((params: { templateId: string, center: Point, scale: number, rotationDeg: number, color?: string }) => {
     const { templateId, center, scale, rotationDeg, color } = params;
-    
+
     setAreas(prev => {
       resetPaperProject(width, height);
       const whimsy = whimsies.find(w => w.id === templateId);
       const stem = whimsy ? whimsy.svgData : getWhimsyTemplatePathData(templateId as WhimsyTemplateId);
-      
+
       const whimsyPath = new paper.CompoundPath({
         pathData: stem,
         insert: false
@@ -352,12 +334,16 @@ export function usePuzzleEngineV3(): {
       whimsyPath.closed = true;
       whimsyPath.scale(scale, new paper.Point(0, 0));
       whimsyPath.rotate(rotationDeg, new paper.Point(0, 0));
-      whimsyPath.position = new paper.Point(center.x, center.y);
+      const wb = whimsyPath.bounds;
+      whimsyPath.translate(new paper.Point(
+        center.x - (wb.x + wb.width / 2),
+        center.y - (wb.y + wb.height / 2)
+      ));
       whimsyPath.reorient(true, true);
       whimsyPath.remove();
-      
+
       let nextAreas = { ...prev };
-      
+
       Object.keys(nextAreas).forEach(id => {
         const area = nextAreas[id];
         if (area.type === AreaType.PIECE) {
@@ -365,10 +351,7 @@ export function usePuzzleEngineV3(): {
           if (piecePath.intersects(whimsyPath) || piecePath.contains(whimsyPath.bounds.center)) {
             const subtracted = piecePath.subtract(whimsyPath);
             subtracted.remove();
-            nextAreas[id] = {
-              ...area,
-              boundary: subtracted
-            };
+            nextAreas[id] = { ...area, boundary: subtracted };
           }
           piecePath.remove();
         }
@@ -376,13 +359,12 @@ export function usePuzzleEngineV3(): {
 
       const whimsyId = `whimsy-${Math.random().toString(36).slice(2, 6)}`;
       whimsyPath.remove();
-      
-      // Pick unique color for whimsy
+
       const neighborColors = getNeighborColors(nextAreas, whimsyPath);
 
       nextAreas[whimsyId] = {
         id: whimsyId,
-        parentId: null,
+        groupMemberships: [],
         type: AreaType.PIECE,
         children: [],
         boundary: whimsyPath,
@@ -390,12 +372,11 @@ export function usePuzzleEngineV3(): {
         seedPoint: center
       };
 
-      // After adding whimsy, validate and clean state to handle split pieces
       nextAreas = validateAndCleanState(nextAreas);
 
       return nextAreas;
     });
-  }, [width, height]);
+  }, [width, height, whimsies]);
 
   const validateGrid = useCallback(() => {
     const results: string[] = [];
@@ -447,14 +428,13 @@ export function usePuzzleEngineV3(): {
     setConnectors(prev => {
       const current = prev[id];
       if (!current) return prev;
-      
-      // Check if anything actually changed
+
       const hasChanges = Object.entries(updates).some(([key, value]) => {
         return current[key as keyof Connector] !== value;
       });
-      
+
       if (!hasChanges) return prev;
-      
+
       return {
         ...prev,
         [id]: { ...current, ...updates }
@@ -592,11 +572,9 @@ export function usePuzzleEngineV3(): {
     setConnectors(prev => {
       const next = { ...prev };
       const connectorList = Object.values(next) as Connector[];
-      
-      // Reset all to enabled first
+
       connectorList.forEach(c => c.disabled = false);
 
-      // Pre-calculate paths for all connectors
       const paths: Record<string, paper.PathItem> = {};
       connectorList.forEach(c => {
         const area = areas[c.pieceId];
@@ -622,7 +600,6 @@ export function usePuzzleEngineV3(): {
         }
       });
 
-      // Check for intersections
       for (let i = 0; i < connectorList.length; i++) {
         const c1 = connectorList[i];
         const p1 = paths[c1.id];
@@ -634,7 +611,6 @@ export function usePuzzleEngineV3(): {
           if (!p2) continue;
 
           if (p1.intersects(p2)) {
-            // Disable one of them (the one with the "smaller" ID to be deterministic)
             if (c1.id < c2.id) {
               next[c1.id].disabled = true;
             } else {
@@ -644,7 +620,6 @@ export function usePuzzleEngineV3(): {
         }
       }
 
-      // Cleanup
       Object.values(paths).forEach(p => p.remove());
       return next;
     });
@@ -654,11 +629,10 @@ export function usePuzzleEngineV3(): {
     areas,
     connectors,
     whimsies,
-    groupTemplates: groupTemplateOps.groupTemplates,
     rootAreaId: rootAreaId || '',
     width,
     height
-  }), [areas, connectors, whimsies, groupTemplateOps.groupTemplates, rootAreaId, width, height]);
+  }), [areas, connectors, whimsies, rootAreaId, width, height]);
 
   return {
     puzzleState,
@@ -677,7 +651,7 @@ export function usePuzzleEngineV3(): {
     resolveConnectorConflicts,
     validateGrid,
     cleanPuzzle,
-    reset: () => { setAreas({}); setConnectors({}); setRootAreaId(null); groupTemplateOps.setGroupTemplates({}); },
-    groupTemplates: groupTemplateOps
+    reset: () => { setAreas({}); setConnectors({}); setRootAreaId(null); },
+    stamps: stampOps
   };
 }

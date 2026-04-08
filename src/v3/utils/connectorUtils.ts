@@ -112,7 +112,11 @@ export function generateConnectorPath(
     // Whimsies are normalized to radius 1 (approx 2x2 box)
     // We want them to be roughly 24px wide at scale 1.0
     head.scale(12 * headScale, new paper.Point(0, 0));
-    head.position = headCenter;
+    const hb = head.bounds;
+    head.translate(new paper.Point(
+      headCenter.x - (hb.x + hb.width / 2),
+      headCenter.y - (hb.y + hb.height / 2)
+    ));
   } else {
     // Fallback for legacy templates
     if (headTemplateId === 'star') {
