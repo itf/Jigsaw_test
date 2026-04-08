@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
-import { Grid, Hexagon, Shuffle, Link as LinkIcon, Download, RefreshCw, Trash2, X, Layers, Merge, Circle, Star, Sparkles, Plus, Book, Network, Crop } from 'lucide-react';
+import { Grid, Hexagon, Shuffle, Link as LinkIcon, Download, RefreshCw, Trash2, X, Layers, Merge, Circle, Star, Sparkles, Plus, Book, Network, Crop, Copy } from 'lucide-react';
 import { Tab } from '../../v2/constants';
 import { WheelSlider } from './ui/WheelSlider';
 import { WhimsyLibrary } from './WhimsyLibrary';
 import { Whimsy } from '../types';
 import { V3MassConnectionTab } from './V3MassConnectionTab';
+import { GroupTemplatePanel } from './GroupTemplatePanel';
+import { GroupTemplate } from '../types/groupTemplateTypes';
 
 interface V3ActionBarProps {
   activeTab: Tab;
@@ -72,6 +74,12 @@ interface V3ActionBarProps {
   onToggleRectSelect: () => void;
   massHeadIds: string[];
   setMassHeadIds: (ids: string[]) => void;
+  // Group template props
+  groupTemplates: Record<string, GroupTemplate>;
+  onCreateGroupTemplate: (name: string, pieceIds: string[]) => void;
+  onPlaceGroupTemplate: (templateId: string) => void;
+  onRemoveGroupTemplate: (templateId: string) => void;
+  onRefreshGroupTemplateCaches: () => void;
 }
 
 const Label: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -154,9 +162,15 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
   onToggleRectSelect,
   massHeadIds,
   setMassHeadIds,
+  groupTemplates,
+  onCreateGroupTemplate,
+  onPlaceGroupTemplate,
+  onRemoveGroupTemplate,
+  onRefreshGroupTemplateCaches,
 }) => {
   const [showWhimsyLibrary, setShowWhimsyLibrary] = useState(false);
   const [libraryMode, setLibraryMode] = useState<'WHIMSY' | 'CONNECTOR'>('WHIMSY');
+  const [showGroupTemplatePanel, setShowGroupTemplatePanel] = useState(false);
 
   const canSubdivide = selectedIds.length > 0;
 
@@ -366,10 +380,26 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
         )}
 
         {activeTab === 'MODIFICATION' && (
-          <div className="flex items-center gap-2 px-3 py-1.5 text-slate-600 bg-slate-50 rounded-xl shrink-0">
-            <Layers className="w-3.5 h-3.5" />
-            <span className="text-xs font-bold uppercase tracking-tight">Modification</span>
-          </div>
+          <>
+            <div className="flex items-center gap-2 px-3 py-1.5 text-slate-600 bg-slate-50 rounded-xl shrink-0">
+              <Layers className="w-3.5 h-3.5" />
+              <span className="text-xs font-bold uppercase tracking-tight">Modification</span>
+            </div>
+
+            <Divider />
+
+            <button
+              onClick={() => setShowGroupTemplatePanel(prev => !prev)}
+              className={`flex items-center gap-1.5 h-7 px-3 rounded-lg text-[10px] font-bold transition-colors ${
+                showGroupTemplatePanel
+                  ? 'bg-violet-600 text-white'
+                  : 'bg-violet-50 text-violet-600 hover:bg-violet-100'
+              }`}
+            >
+              <Copy className="w-3 h-3" />
+              Groups ({Object.keys(groupTemplates).length})
+            </button>
+          </>
         )}
 
         {activeTab === 'CONNECTION' && (
@@ -539,6 +569,20 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
             }}
             onUpload={onUploadWhimsy}
             onRemove={onRemoveWhimsy}
+          />
+        </div>
+      )}
+
+      {/* Group Template Panel Popover */}
+      {showGroupTemplatePanel && activeTab === 'MODIFICATION' && (
+        <div className="absolute top-full left-4 mt-2 z-50 shadow-2xl">
+          <GroupTemplatePanel
+            groupTemplates={groupTemplates}
+            selectedIds={selectedIds}
+            onCreateTemplate={onCreateGroupTemplate}
+            onPlaceTemplate={onPlaceGroupTemplate}
+            onRemoveTemplate={onRemoveGroupTemplate}
+            onRefreshCaches={onRefreshGroupTemplateCaches}
           />
         </div>
       )}

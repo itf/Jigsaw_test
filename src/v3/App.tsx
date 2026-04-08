@@ -74,7 +74,8 @@ export default function V3App() {
     resolveConnectorConflicts,
     validateGrid,
     cleanPuzzle,
-    reset
+    reset,
+    groupTemplates: groupTemplateOps
   } = usePuzzleEngineV3();
 
   const { areas, connectors, whimsies, width, height } = puzzleState;
@@ -377,6 +378,16 @@ export default function V3App() {
         }}
         massHeadIds={massHeadIds}
         setMassHeadIds={setMassHeadIds}
+        groupTemplates={groupTemplateOps.groupTemplates}
+        onCreateGroupTemplate={groupTemplateOps.createGroupTemplate}
+        onPlaceGroupTemplate={(templateId) => {
+          // Place at identity transform under the root area
+          groupTemplateOps.placeGroupTemplate(templateId, puzzleState.rootAreaId, {
+            translateX: 0, translateY: 0, rotation: 0, flipX: false
+          });
+        }}
+        onRemoveGroupTemplate={groupTemplateOps.removeGroupTemplate}
+        onRefreshGroupTemplateCaches={groupTemplateOps.refreshAllTemplateCaches}
       />
 
       <main className="flex-1 relative overflow-hidden flex flex-col" ref={containerRef}>

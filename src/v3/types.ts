@@ -1,4 +1,5 @@
 import paper from 'paper';
+import { GroupTemplate, GroupInstance } from './types/groupTemplateTypes';
 
 export type Point = { x: number; y: number };
 
@@ -15,6 +16,8 @@ export interface Area {
   boundary: paper.PathItem; // Paper.js PathItem representing the boundary
   color: string;
   seedPoint?: Point; // Optional, useful for grids
+  /** Present only on areas that are instances of a GroupTemplate */
+  groupInstance?: GroupInstance;
 }
 
 export interface Connector {
@@ -31,6 +34,8 @@ export interface Connector {
   jitter?: number;
   jitterSeed?: number;
   disabled?: boolean;
+  /** If set, this connector was materialized from a BoundaryConnectorSlot */
+  sourceSlotId?: string;
 }
 
 export interface Whimsy {
@@ -44,6 +49,7 @@ export interface PuzzleState {
   areas: Record<string, Area>;
   connectors: Record<string, Connector>;
   whimsies: Whimsy[]; // Library of available whimsies
+  groupTemplates: Record<string, GroupTemplate>;
   rootAreaId: string;
   width: number;
   height: number;

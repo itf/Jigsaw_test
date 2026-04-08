@@ -132,7 +132,25 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
   }, []);
 
   const leafPieces = useMemo(() => {
-    return (Object.values(areas) as Area[]).filter(a => a.type === AreaType.PIECE);
+    const pieces = (Object.values(areas) as Area[]).filter(a => a.type === AreaType.PIECE);
+    // Group instance pieces render on top (non-destructive overlay)
+    const isInstancePiece = (a: Area): boolean => {
+      if (a.groupInstance) return true;
+      // Check if any ancestor is a group instance
+      let current = a;
+      while (current.parentId) {
+        const parent = areas[current.parentId];
+        if (!parent) break;
+        if (parent.groupInstance) return true;
+        current = parent;
+      }
+      return false;
+    };
+    return pieces.sort((a, b) => {
+      const aInstance = isInstancePiece(a) ? 1 : 0;
+      const bInstance = isInstancePiece(b) ? 1 : 0;
+      return aInstance - bInstance;
+    });
   }, [areas]);
 
   const whimsyPreviewPathData = useMemo(() => {
@@ -367,6 +385,16 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
             const isSelected = selectedIds.includes(piece.id);
             const isHovered = hoveredId === piece.id;
             const isNeighbor = connectionData?.neighborId === piece.id;
+            // Check if this piece belongs to a group instance (overlay)
+            const isGroupInstancePiece = (() => {
+              if (piece.groupInstance) return true;
+              let current: Area | undefined = piece;
+              while (current?.parentId) {
+                current = areas[current.parentId];
+                if (current?.groupInstance) return true;
+              }
+              return false;
+            })();
 
             return (
               <g key={piece.id}>
@@ -374,8 +402,8 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
                   d={piece.boundary.pathData}
                   fill={piece.color}
                   fillRule="evenodd"
-                  stroke={isSelected ? (activeTab === 'CONNECTION' ? '#10b981' : '#4f46e5') : isNeighbor ? '#fbbf24' : isHovered ? '#6366f1' : '#000'}
-                  strokeWidth={isSelected ? 4 : isNeighbor ? 3 : isHovered ? 2 : 1}
+                  stroke={isSelected ? (activeTab === 'CONNECTION' ? '#10b981' : '#4f46e5') : isNeighbor ? '#fbbf24' : isHovered ? '#6366f1' : isGroupInstancePiece ? '#7c3aed' : '#000'}
+                  strokeWidth={isSelected ? 4 : isNeighbor ? 3 : isHovered ? 2 : isGroupInstancePiece ? 1.5 : 1}
                   strokeLinejoin="round"
                   strokeLinecap="round"
                   filter={isSelected ? 'url(#piece-selection-glow)' : undefined}
@@ -391,6 +419,19 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
                     }
                   }}
                 />
+                {isGroupInstancePiece && !isSelected && (
+                  <path
+                    d={piece.boundary.pathData}
+                    fill="none"
+                    stroke="#7c3aed"
+                    strokeWidth={1}
+                    strokeDasharray="4 3"
+                    fillRule="evenodd"
+                    strokeLinejoin="round"
+                    opacity={0.5}
+                    className="pointer-events-none"
+                  />
+                )}
                 {isSelected && (
                   <>
                     <path

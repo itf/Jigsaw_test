@@ -7,6 +7,7 @@ import { generateGridPoints, generateHexGridPoints, generateRandomPoints } from 
 import { getWhimsyTemplatePathData, WhimsyTemplateId } from '../utils/whimsyGallery';
 import { validateAndCleanState } from '../utils/puzzleValidation';
 import { findNeighborPiece, generateConnectorPath } from '../utils/connectorUtils';
+import { useGroupTemplates } from './useGroupTemplates';
 
 const COLORS = [
   '#f87171', '#fb923c', '#fbbf24', '#facc15', '#a3e635', '#4ade80', 
@@ -81,6 +82,8 @@ export function usePuzzleEngineV3(): {
   validateGrid: () => void;
   cleanPuzzle: () => void;
   reset: () => void;
+  // Group template operations
+  groupTemplates: ReturnType<typeof useGroupTemplates>;
 } {
   const [areas, setAreas] = useState<Record<string, Area>>({});
   const [connectors, setConnectors] = useState<Record<string, Connector>>({});
@@ -93,6 +96,8 @@ export function usePuzzleEngineV3(): {
     { id: 'square', name: 'Square', svgData: getWhimsyTemplatePathData('square'), category: 'Basic' },
     { id: 'triangle', name: 'Triangle', svgData: getWhimsyTemplatePathData('triangle'), category: 'Basic' },
   ]);
+
+  const groupTemplateOps = useGroupTemplates(areas, setAreas, connectors, setConnectors, width, height);
 
   const createRoot = useCallback((w: number, h: number) => {
     console.log('usePuzzleEngineV3: createRoot', w, h);
@@ -640,10 +645,11 @@ export function usePuzzleEngineV3(): {
     areas,
     connectors,
     whimsies,
+    groupTemplates: groupTemplateOps.groupTemplates,
     rootAreaId: rootAreaId || '',
     width,
     height
-  }), [areas, connectors, whimsies, rootAreaId, width, height]);
+  }), [areas, connectors, whimsies, groupTemplateOps.groupTemplates, rootAreaId, width, height]);
 
   return {
     puzzleState,
@@ -662,6 +668,7 @@ export function usePuzzleEngineV3(): {
     resolveConnectorConflicts,
     validateGrid,
     cleanPuzzle,
-    reset: () => { setAreas({}); setConnectors({}); setRootAreaId(null); }
+    reset: () => { setAreas({}); setConnectors({}); setRootAreaId(null); groupTemplateOps.setGroupTemplates({}); },
+    groupTemplates: groupTemplateOps
   };
 }
