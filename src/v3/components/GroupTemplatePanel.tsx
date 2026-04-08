@@ -82,7 +82,7 @@ export const GroupTemplatePanel: React.FC<GroupTemplatePanelProps> = ({
               <button
                 onClick={() => onPlaceTemplate(t.id)}
                 className="p-1 rounded hover:bg-violet-100 text-slate-400 hover:text-violet-600 transition-colors"
-                title="Place instance of this template"
+                title="Click to enter drag-and-drop placement mode"
               >
                 <Copy className="w-3 h-3" />
               </button>

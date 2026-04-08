@@ -30,6 +30,16 @@ export function useGroupTemplates(
 
     const { pathData, boundary } = computeGroupBoundary(pieceIds, areas);
     const boundarySlots = extractBoundarySlots(pieceIds, areas, connectors, boundary);
+    
+    // Compute bounds for centering during placement
+    const bounds = boundary.bounds;
+    const templateBounds = {
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height
+    };
+    
     boundary.remove();
 
     const id = `template-${Math.random().toString(36).slice(2, 8)}`;
@@ -38,7 +48,8 @@ export function useGroupTemplates(
       name,
       sourcePieceIds: pieceIds,
       cachedBoundaryPathData: pathData,
-      boundarySlots
+      boundarySlots,
+      bounds: templateBounds
     };
 
     setGroupTemplates(prev => ({ ...prev, [id]: template }));

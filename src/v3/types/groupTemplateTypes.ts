@@ -41,6 +41,13 @@ export interface GroupTemplate {
   cachedBoundaryPathData: string;
   /** Connector slots on the outer boundary — also recomputed with the cache */
   boundarySlots: BoundaryConnectorSlot[];
+  /** Bounds of the template boundary for centering on cursor during placement */
+  bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
 }
 
 /**

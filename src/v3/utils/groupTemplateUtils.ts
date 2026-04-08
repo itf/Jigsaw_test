@@ -118,13 +118,24 @@ export function refreshTemplateCache(
 
   const { pathData, boundary } = computeGroupBoundary(validIds, areas);
   const boundarySlots = extractBoundarySlots(validIds, areas, connectors, boundary);
+  
+  // Recompute bounds
+  const bounds = boundary.bounds;
+  const templateBounds = {
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height
+  };
+  
   boundary.remove();
 
   return {
     ...template,
     sourcePieceIds: validIds,
     cachedBoundaryPathData: pathData,
-    boundarySlots
+    boundarySlots,
+    bounds: templateBounds
   };
 }
 

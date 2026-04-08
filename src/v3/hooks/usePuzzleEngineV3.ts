@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import paper from 'paper';
 import { Delaunay } from 'd3-delaunay';
 import { Area, AreaType, Operation, OperationType, PuzzleState, Point, Connector, Whimsy } from '../types';
@@ -90,6 +90,7 @@ export function usePuzzleEngineV3(): {
   const [width, setWidth] = useState(800);
   const [height, setHeight] = useState(600);
   const [rootAreaId, setRootAreaId] = useState<string | null>(null);
+  const [processedMaterializationIds, setProcessedMaterializationIds] = useState<Set<string>>(new Set());
   const [whimsies, setWhimsies] = useState<Whimsy[]>([
     { id: 'circle', name: 'Circle', svgData: getWhimsyTemplatePathData('circle'), category: 'Basic' },
     { id: 'star', name: 'Star', svgData: getWhimsyTemplatePathData('star'), category: 'Basic' },
@@ -128,6 +129,10 @@ export function usePuzzleEngineV3(): {
 
   const subdivideGrid = useCallback((params: { parentId: string, pattern: string, rows: number, cols: number, count: number, jitter: number }) => {
     const { parentId, pattern, rows, cols, count, jitter } = params;
+    
+    const isGroupInstance = (parentId: string, currentAreas: Record<string, Area>) => {
+      return currentAreas[parentId]?.groupInstance !== undefined;
+    };
     
     setAreas(prev => {
       const parent = prev[parentId];
@@ -237,6 +242,11 @@ export function usePuzzleEngineV3(): {
         type: AreaType.GROUP,
         children: childIds
       };
+
+      // After updating areas, if this is a group instance, mark it for materialization
+      if (isGroupInstance(parentId, nextAreas)) {
+        (nextAreas as any).__pendingMaterializationId = parentId;
+      }
 
       return nextAreas;
     });
@@ -640,6 +650,22 @@ export function usePuzzleEngineV3(): {
       return next;
     });
   }, [areas, whimsies]);
+
+  // Handle pending materializations after subdivision
+  useEffect(() => {
+    const pendingId = (areas as any).__pendingMaterializationId;
+    if (pendingId && areas[pendingId] && !processedMaterializationIds.has(pendingId)) {
+      const groupArea = areas[pendingId];
+      if (groupArea.type === AreaType.GROUP && groupArea.children && groupArea.children.length > 0) {
+        // Call materialization
+        groupTemplateOps.materializeInstanceConnectors(pendingId);
+        // Mark as processed
+        setProcessedMaterializationIds(prev => new Set(prev).add(pendingId));
+        // Clear the pending flag
+        delete (areas as any).__pendingMaterializationId;
+      }
+    }
+  }, [areas, processedMaterializationIds]);
 
   const puzzleState = useMemo(() => ({
     areas,

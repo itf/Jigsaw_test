@@ -25,6 +25,10 @@ interface V3CanvasProps {
   whimsyScale: number;
   whimsyRotationDeg: number;
   onWhimsyCommit: (p: Point) => void;
+  groupTemplatePlacementActive: boolean;
+  activeGroupTemplateId: string | null;
+  onGroupTemplateCommit: (p: Point) => void;
+  onGroupTemplateCancelPlacement?: () => void;
   activeTab: string;
   connectionT: number;
   connectionPathIndex: number;
@@ -58,6 +62,10 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
   whimsyScale,
   whimsyRotationDeg,
   onWhimsyCommit,
+  groupTemplatePlacementActive,
+  activeGroupTemplateId,
+  onGroupTemplateCommit,
+  onGroupTemplateCancelPlacement,
   activeTab,
   connectionT,
   connectionPathIndex,
@@ -78,7 +86,7 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
   onRectPoint,
   previewConnectors,
 }) => {
-  const { areas, connectors, whimsies, width, height } = puzzleState;
+  const { areas, connectors, whimsies, groupTemplates, width, height } = puzzleState;
   const outerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -296,7 +304,7 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
     }
 
     const boardPt = clientToBoard(clientX, clientY);
-    if (whimsyPlacementActive || rectSelectMode) {
+    if (whimsyPlacementActive || groupTemplatePlacementActive || rectSelectMode) {
       setMousePos(boardPt);
     }
     if (isDraggingNewHandler && connectionData) {
@@ -310,7 +318,7 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
         onConnectorUpdate(draggingConnectorId, { midT: t, pathIndex });
       }
     }
-  }, [whimsyPlacementActive, rectSelectMode, isDraggingNewHandler, draggingConnectorId, connectionData, renderedConnectors, clientToBoard, onConnectionUpdate, onConnectorUpdate]);
+  }, [whimsyPlacementActive, groupTemplatePlacementActive, rectSelectMode, isDraggingNewHandler, draggingConnectorId, connectionData, renderedConnectors, clientToBoard, onConnectionUpdate, onConnectorUpdate]);
 
   const handleMouseUp = useCallback(() => {
     setIsDraggingNewHandler(false);
@@ -331,6 +339,20 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
       window.removeEventListener('touchend', handleMouseUp);
     };
   }, [isDraggingNewHandler, draggingConnectorId, handleMouseMove, handleMouseUp]);
+
+  // Handle ESC key to cancel placements
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (groupTemplatePlacementActive && onGroupTemplateCancelPlacement) {
+          e.preventDefault();
+          onGroupTemplateCancelPlacement();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [groupTemplatePlacementActive, onGroupTemplateCancelPlacement]);
 
   return (
     <div 
@@ -669,6 +691,42 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
                 e.preventDefault();
                 e.stopPropagation();
                 onWhimsyCommit(clientToBoard(e.clientX, e.clientY));
+              }}
+            />
+          )}
+
+          {/* Group Template Preview */}
+          {groupTemplatePlacementActive && activeGroupTemplateId && groupTemplates[activeGroupTemplateId] && (
+            <g 
+              className="pointer-events-none" 
+              transform={`translate(${mousePos.x - groupTemplates[activeGroupTemplateId].bounds.x - groupTemplates[activeGroupTemplateId].bounds.width / 2}, ${mousePos.y - groupTemplates[activeGroupTemplateId].bounds.y - groupTemplates[activeGroupTemplateId].bounds.height / 2})`}
+            >
+              <path
+                d={groupTemplates[activeGroupTemplateId].cachedBoundaryPathData}
+                fill="rgba(124, 58, 247, 0.15)"
+                stroke="rgba(109, 40, 217, 0.8)"
+                strokeWidth={2}
+                strokeLinejoin="round"
+                fillRule="evenodd"
+              />
+            </g>
+          )}
+
+          {/* Group Template Placement Overlay */}
+          {groupTemplatePlacementActive && (
+            <rect
+              width={width}
+              height={height}
+              fill="transparent"
+              className="cursor-crosshair"
+              style={{ pointerEvents: 'all' }}
+              onMouseMove={(e) => {
+                setMousePos(clientToBoard(e.clientX, e.clientY));
+              }}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onGroupTemplateCommit(clientToBoard(e.clientX, e.clientY));
               }}
             />
           )}

@@ -37,6 +37,10 @@ export default function V3App() {
   const [whimsyRotationDeg, setWhimsyRotationDeg] = useState(0);
   const [whimsyPlacementActive, setWhimsyPlacementActive] = useState(false);
 
+  // Group Template Parameters
+  const [groupTemplatePlacementActive, setGroupTemplatePlacementActive] = useState(false);
+  const [activeGroupTemplateId, setActiveGroupTemplateId] = useState<string | null>(null);
+
   // Connection Parameters
   const [connectionT, setConnectionT] = useState(0.5);
   const [connectionPathIndex, setConnectionPathIndex] = useState(0);
@@ -200,6 +204,31 @@ export default function V3App() {
     });
     setWhimsyPlacementActive(false);
   }, [whimsyTemplate, whimsyScale, whimsyRotationDeg, addWhimsy]);
+
+  const handleGroupTemplateCommit = useCallback((p: Point) => {
+    if (!activeGroupTemplateId) return;
+    const template = groupTemplateOps.groupTemplates[activeGroupTemplateId];
+    if (!template) return;
+    
+    // Offset the position to account for centering: the cursor is at the center of the template
+    // So we need to translate back to the top-left corner of the template
+    const adjustedX = p.x - template.bounds.x - template.bounds.width / 2;
+    const adjustedY = p.y - template.bounds.y - template.bounds.height / 2;
+    
+    groupTemplateOps.placeGroupTemplate(activeGroupTemplateId, puzzleState.rootAreaId, {
+      translateX: adjustedX, 
+      translateY: adjustedY, 
+      rotation: 0, 
+      flipX: false
+    });
+    setGroupTemplatePlacementActive(false);
+    setActiveGroupTemplateId(null);
+  }, [activeGroupTemplateId, groupTemplateOps, puzzleState.rootAreaId]);
+
+  const handleGroupTemplateCancelPlacement = useCallback(() => {
+    setGroupTemplatePlacementActive(false);
+    setActiveGroupTemplateId(null);
+  }, []);
 
   const handlePieceClick = useCallback((id: string | null, pt?: Point) => {
     // Prevent piece click from firing immediately after a connector click
@@ -381,10 +410,9 @@ export default function V3App() {
         groupTemplates={groupTemplateOps.groupTemplates}
         onCreateGroupTemplate={groupTemplateOps.createGroupTemplate}
         onPlaceGroupTemplate={(templateId) => {
-          // Place at identity transform under the root area
-          groupTemplateOps.placeGroupTemplate(templateId, puzzleState.rootAreaId, {
-            translateX: 0, translateY: 0, rotation: 0, flipX: false
-          });
+          // Enter placement mode for drag-and-drop placement
+          setActiveGroupTemplateId(templateId);
+          setGroupTemplatePlacementActive(true);
         }}
         onRemoveGroupTemplate={groupTemplateOps.removeGroupTemplate}
         onRefreshGroupTemplateCaches={groupTemplateOps.refreshAllTemplateCaches}
@@ -406,6 +434,10 @@ export default function V3App() {
             whimsyScale={whimsyScale}
             whimsyRotationDeg={whimsyRotationDeg}
             onWhimsyCommit={handleWhimsyCommit}
+            groupTemplatePlacementActive={groupTemplatePlacementActive}
+            activeGroupTemplateId={activeGroupTemplateId}
+            onGroupTemplateCommit={handleGroupTemplateCommit}
+            onGroupTemplateCancelPlacement={handleGroupTemplateCancelPlacement}
             activeTab={activeTab}
             connectionT={connectionT}
             connectionPathIndex={connectionPathIndex}
