@@ -8,6 +8,7 @@ import {
   extractBoundarySlots,
   refreshTemplateCache,
   materializeBoundarySlots,
+  materializeBoundarySlotsForSinglePiece,
   applyInstanceTransform
 } from '../utils/groupTemplateUtils';
 
@@ -101,8 +102,20 @@ export function useGroupTemplates(
       return next;
     });
 
+    // Materialize boundary connectors immediately for the single-piece instance
+    const materializedConnectors = materializeBoundarySlotsForSinglePiece(template, instanceArea);
+    if (materializedConnectors.length > 0) {
+      setConnectors(prev => {
+        const next = { ...prev };
+        materializedConnectors.forEach(c => {
+          next[c.id] = c;
+        });
+        return next;
+      });
+    }
+
     return instanceId;
-  }, [groupTemplates, width, height, setAreas]);
+  }, [groupTemplates, width, height, setAreas, setConnectors]);
 
   /**
    * Materializes boundary connector slots after an instance has been subdivided.
@@ -248,7 +261,54 @@ export function useGroupTemplates(
 
       return anyChanged ? next : prev;
     });
-  }, [areas, connectors, width, height, groupTemplates, setAreas]);
+
+    // Re-materialize connectors for all instances
+    setConnectors(prev => {
+      const next: Record<string, Connector> = { ...prev };
+      let anyConnectorChanged = false;
+
+      // Remove old materialized connectors from all instances
+      for (const connId of Object.keys(next)) {
+        const c = next[connId];
+        if (c.sourceSlotId) {
+          delete next[connId];
+          anyConnectorChanged = true;
+        }
+      }
+
+      // Re-materialize connectors for each instance
+      for (const areaId of Object.keys(areas)) {
+        const area = areas[areaId];
+        if (!area.groupInstance) continue;
+
+        const template = groupTemplates[area.groupInstance.templateId];
+        if (!template) continue;
+
+        // For unsplit instances, materialize directly
+        if (area.children.length === 0) {
+          const newConnectors = materializeBoundarySlotsForSinglePiece(template, area);
+          for (const c of newConnectors) {
+            next[c.id] = c;
+            anyConnectorChanged = true;
+          }
+        } else {
+          // For subdivided instances, materialize via child pieces
+          const childPieces = area.children.map(id => areas[id]).filter(a => a !== undefined);
+          const templateBoundary = pathItemFromBoundaryData(template.cachedBoundaryPathData);
+          const transformed = applyInstanceTransform(templateBoundary, area.groupInstance.transform);
+          const newConnectors = materializeBoundarySlots(template, childPieces as Area[], transformed);
+          transformed.remove();
+          templateBoundary.remove();
+          for (const c of newConnectors) {
+            next[c.id] = c;
+            anyConnectorChanged = true;
+          }
+        }
+      }
+
+      return anyConnectorChanged ? next : prev;
+    });
+  }, [areas, connectors, width, height, groupTemplates, setAreas, setConnectors]);
 
   /**
    * Removes a group template and all its instances.

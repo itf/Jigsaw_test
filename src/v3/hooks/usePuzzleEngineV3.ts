@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import paper from 'paper';
 import { Delaunay } from 'd3-delaunay';
 import { Area, AreaType, Operation, OperationType, PuzzleState, Point, Connector, Whimsy } from '../types';
@@ -90,7 +90,6 @@ export function usePuzzleEngineV3(): {
   const [width, setWidth] = useState(800);
   const [height, setHeight] = useState(600);
   const [rootAreaId, setRootAreaId] = useState<string | null>(null);
-  const [processedMaterializationIds, setProcessedMaterializationIds] = useState<Set<string>>(new Set());
   const [whimsies, setWhimsies] = useState<Whimsy[]>([
     { id: 'circle', name: 'Circle', svgData: getWhimsyTemplatePathData('circle'), category: 'Basic' },
     { id: 'star', name: 'Star', svgData: getWhimsyTemplatePathData('star'), category: 'Basic' },
@@ -461,7 +460,48 @@ export function usePuzzleEngineV3(): {
         [id]: { ...current, ...updates }
       };
     });
-  }, []);
+
+    // If this connector is sourced from a template slot, update the template slot too
+    setConnectors(prev => {
+      const current = prev[id];
+      if (!current || !current.sourceSlotId) return prev;
+
+      // Find the template that contains this slot
+      const template = Object.values(groupTemplateOps.groupTemplates).find(t => {
+        const typedT = t as any;
+        return typedT.boundarySlots?.some((s: any) => s.id === current.sourceSlotId);
+      }) as any;
+
+      if (!template) return prev;
+
+      // Update the slot in the template
+      const updatedSlots = template.boundarySlots.map((slot: any) =>
+        slot.id === current.sourceSlotId
+          ? {
+              ...slot,
+              widthPx: updates.widthPx ?? slot.widthPx,
+              extrusion: updates.extrusion ?? slot.extrusion,
+              headTemplateId: updates.headTemplateId ?? slot.headTemplateId,
+              headScale: updates.headScale ?? slot.headScale,
+              headRotationDeg: updates.headRotationDeg ?? slot.headRotationDeg,
+              useEquidistantHeadPoint: updates.useEquidistantHeadPoint ?? slot.useEquidistantHeadPoint,
+              jitter: updates.jitter ?? slot.jitter,
+              jitterSeed: updates.jitterSeed ?? slot.jitterSeed
+            }
+          : slot
+      );
+
+      const updatedTemplate = { ...template, boundarySlots: updatedSlots };
+      
+      groupTemplateOps.setGroupTemplates((prev: any) => {
+        const next = { ...prev };
+        next[template.id] = updatedTemplate;
+        return next;
+      });
+
+      return prev;
+    });
+  }, [groupTemplateOps]);
 
   const removeConnector = useCallback((id: string) => {
     setConnectors(prev => {
@@ -650,22 +690,6 @@ export function usePuzzleEngineV3(): {
       return next;
     });
   }, [areas, whimsies]);
-
-  // Handle pending materializations after subdivision
-  useEffect(() => {
-    const pendingId = (areas as any).__pendingMaterializationId;
-    if (pendingId && areas[pendingId] && !processedMaterializationIds.has(pendingId)) {
-      const groupArea = areas[pendingId];
-      if (groupArea.type === AreaType.GROUP && groupArea.children && groupArea.children.length > 0) {
-        // Call materialization
-        groupTemplateOps.materializeInstanceConnectors(pendingId);
-        // Mark as processed
-        setProcessedMaterializationIds(prev => new Set(prev).add(pendingId));
-        // Clear the pending flag
-        delete (areas as any).__pendingMaterializationId;
-      }
-    }
-  }, [areas, processedMaterializationIds]);
 
   const puzzleState = useMemo(() => ({
     areas,

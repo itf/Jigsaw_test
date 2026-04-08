@@ -222,6 +222,42 @@ export function materializeBoundarySlots(
 }
 
 /**
+ * Materializes boundary connector slots for an unsplit group instance.
+ * When a group template is placed without subdivision, it's a single piece.
+ * This function creates connectors directly on that piece using the boundary slots.
+ */
+export function materializeBoundarySlotsForSinglePiece(
+  template: GroupTemplate,
+  instanceArea: Area
+): Connector[] {
+  const connectors: Connector[] = [];
+
+  for (const slot of template.boundarySlots) {
+    // For a single piece instance, we need to transform the slot parameters
+    // from the template boundary to the instance boundary
+    const connectors_for_slot: Connector = {
+      id: `materialized-${slot.id}-${Math.random().toString(36).slice(2, 6)}`,
+      pieceId: instanceArea.id,
+      pathIndex: slot.pathIndex,
+      midT: slot.midT,
+      widthPx: slot.widthPx,
+      extrusion: slot.extrusion,
+      headTemplateId: slot.headTemplateId,
+      headScale: slot.headScale,
+      headRotationDeg: slot.headRotationDeg,
+      useEquidistantHeadPoint: slot.useEquidistantHeadPoint,
+      jitter: slot.jitter,
+      jitterSeed: slot.jitterSeed,
+      sourceSlotId: slot.id
+    };
+
+    connectors.push(connectors_for_slot);
+  }
+
+  return connectors;
+}
+
+/**
  * Applies a GroupInstance transform to a Paper.js PathItem.
  * Returns a new (cloned + transformed) PathItem.
  */
