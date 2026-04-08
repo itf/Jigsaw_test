@@ -214,7 +214,7 @@ export function useGroupTemplates(
 
       for (const areaId of Object.keys(next)) {
         const area = next[areaId];
-        if (!area.groupInstance) continue;
+        if (!area?.groupInstance) continue;
 
         const templateId = area.groupInstance.templateId;
         const update = updatedTemplates[templateId];

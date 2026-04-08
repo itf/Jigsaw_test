@@ -179,7 +179,20 @@ function applyConnectorsToBoundary(
 }
 
 /**
+ * Recursively collects all leaf PIECE descendants of an area.
+ * If the area is itself a PIECE, returns [id].
+ * If it's a GROUP, recurses into children.
+ */
+function collectLeafPieceIds(id: string, areas: Record<string, Area>): string[] {
+  const area = areas[id];
+  if (!area) return [];
+  if (area.type === AreaType.PIECE) return [id];
+  return area.children.flatMap(childId => collectLeafPieceIds(childId, areas));
+}
+
+/**
  * Refreshes a template's cached boundary from the current state of its source pieces.
+ * If a source piece has been subdivided into a GROUP, its leaf PIECE descendants are used instead.
  * Captures the old boundary path data so callers can compute the delta for instance updates.
  *
  * Returns { updated template, oldBoundaryPathData } or null if source pieces are gone.
@@ -190,7 +203,11 @@ export function refreshTemplateCache(
   connectors: Record<string, Connector>,
   whimsies: Whimsy[]
 ): { template: GroupTemplate; oldBoundaryPathData: string } | null {
-  const validIds = template.sourcePieceIds.filter(id => areas[id] && areas[id].type === AreaType.PIECE);
+  // Resolve each source piece ID to its current leaf PIECE descendants
+  const validIds = template.sourcePieceIds
+    .flatMap(id => areas[id] ? collectLeafPieceIds(id, areas) : [])
+    .filter((id, i, arr) => arr.indexOf(id) === i); // deduplicate
+
   if (validIds.length === 0) return null;
 
   const { pathData, boundary } = computeGroupBoundary(
