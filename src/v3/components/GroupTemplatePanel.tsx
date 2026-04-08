@@ -5,7 +5,7 @@ import { GroupTemplate } from '../types/groupTemplateTypes';
 interface GroupTemplatePanelProps {
   groupTemplates: Record<string, GroupTemplate>;
   selectedIds: string[];
-  onCreateTemplate: (name: string, pieceIds: string[]) => void;
+  onCreateTemplate: (name: string, pieceIds: string[], includeNonAdjacentConnectors: boolean) => void;
   onPlaceTemplate: (templateId: string) => void;
   onRemoveTemplate: (templateId: string) => void;
   onRefreshCaches: () => void;
@@ -20,12 +20,13 @@ export const GroupTemplatePanel: React.FC<GroupTemplatePanelProps> = ({
   onRefreshCaches
 }) => {
   const [templateName, setTemplateName] = useState('');
+  const [includeNonAdjacent, setIncludeNonAdjacent] = useState(false);
   const templates: GroupTemplate[] = Object.values(groupTemplates);
 
   const handleCreate = () => {
     if (selectedIds.length < 2) return;
     const name = templateName.trim() || `Group ${templates.length + 1}`;
-    onCreateTemplate(name, selectedIds);
+    onCreateTemplate(name, selectedIds, includeNonAdjacent);
     setTemplateName('');
   };
 
@@ -56,6 +57,17 @@ export const GroupTemplatePanel: React.FC<GroupTemplatePanelProps> = ({
         </button>
       </div>
 
+      {/* Include non-adjacent connectors option */}
+      <label className="flex items-center gap-1.5 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={includeNonAdjacent}
+          onChange={e => setIncludeNonAdjacent(e.target.checked)}
+          className="w-3 h-3 accent-violet-600"
+        />
+        <span className="text-[9px] text-slate-500">Include non-adjacent inward connectors</span>
+      </label>
+
       {selectedIds.length < 2 && (
         <p className="text-[9px] text-slate-400 italic">Select 2+ adjacent pieces to create a template</p>
       )}
@@ -78,7 +90,7 @@ export const GroupTemplatePanel: React.FC<GroupTemplatePanelProps> = ({
           {templates.map(t => (
             <div key={t.id} className="flex items-center gap-1.5 py-1 px-2 bg-slate-50 rounded-lg">
               <span className="flex-1 text-[10px] font-semibold text-slate-700 truncate">{t.name}</span>
-              <span className="text-[9px] text-slate-400">{t.sourcePieceIds.length}p · {t.boundarySlots.length}c</span>
+              <span className="text-[9px] text-slate-400">{t.sourcePieceIds.length}p</span>
               <button
                 onClick={() => onPlaceTemplate(t.id)}
                 className="p-1 rounded hover:bg-violet-100 text-slate-400 hover:text-violet-600 transition-colors"

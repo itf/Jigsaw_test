@@ -1,14 +1,12 @@
 import React, { useState, useCallback } from 'react';
 import paper from 'paper';
-import { Area, AreaType, Connector } from '../types';
+import { Area, AreaType, Connector, Whimsy } from '../types';
 import { GroupTemplate, GroupInstance } from '../types/groupTemplateTypes';
 import { resetPaperProject, pathItemFromBoundaryData } from '../utils/paperUtils';
 import {
   computeGroupBoundary,
-  extractBoundarySlots,
   refreshTemplateCache,
-  materializeBoundarySlots,
-  materializeBoundarySlotsForSinglePiece,
+  updateInstanceForNewBoundary,
   applyInstanceTransform
 } from '../utils/groupTemplateUtils';
 
@@ -17,6 +15,7 @@ export function useGroupTemplates(
   setAreas: React.Dispatch<React.SetStateAction<Record<string, Area>>>,
   connectors: Record<string, Connector>,
   setConnectors: React.Dispatch<React.SetStateAction<Record<string, Connector>>>,
+  whimsies: Whimsy[],
   width: number,
   height: number
 ) {
@@ -24,14 +23,23 @@ export function useGroupTemplates(
 
   /**
    * Creates a group template from a set of selected piece IDs.
-   * Computes the outer boundary and extracts external connector slots.
+   * Computes the outer boundary with connector geometry baked in.
    */
-  const createGroupTemplate = useCallback((name: string, pieceIds: string[]) => {
+  const createGroupTemplate = useCallback((
+    name: string,
+    pieceIds: string[],
+    includeNonAdjacentConnectors?: boolean
+  ) => {
     resetPaperProject(width, height);
 
-    const { pathData, boundary } = computeGroupBoundary(pieceIds, areas);
-    const boundarySlots = extractBoundarySlots(pieceIds, areas, connectors, boundary);
-    
+    const { pathData, boundary } = computeGroupBoundary(
+      pieceIds,
+      areas,
+      connectors,
+      whimsies,
+      includeNonAdjacentConnectors
+    );
+
     // Compute bounds for centering during placement
     const bounds = boundary.bounds;
     const templateBounds = {
@@ -40,7 +48,7 @@ export function useGroupTemplates(
       width: bounds.width,
       height: bounds.height
     };
-    
+
     boundary.remove();
 
     const id = `template-${Math.random().toString(36).slice(2, 8)}`;
@@ -49,18 +57,19 @@ export function useGroupTemplates(
       name,
       sourcePieceIds: pieceIds,
       cachedBoundaryPathData: pathData,
-      boundarySlots,
-      bounds: templateBounds
+      bounds: templateBounds,
+      includeNonAdjacentConnectors
     };
 
     setGroupTemplates(prev => ({ ...prev, [id]: template }));
     return template;
-  }, [areas, connectors, width, height]);
+  }, [areas, connectors, whimsies, width, height]);
 
   /**
    * Places a group template instance at the given transform.
    * Creates a new PIECE area with the template boundary (transformed).
    * Does NOT subtract from surrounding pieces (non-destructive overlay).
+   * No Connector objects are created — geometry is baked into the boundary.
    */
   const placeGroupTemplate = useCallback((
     templateId: string,
@@ -102,63 +111,12 @@ export function useGroupTemplates(
       return next;
     });
 
-    // Materialize boundary connectors immediately for the single-piece instance
-    const materializedConnectors = materializeBoundarySlotsForSinglePiece(template, instanceArea);
-    if (materializedConnectors.length > 0) {
-      setConnectors(prev => {
-        const next = { ...prev };
-        materializedConnectors.forEach(c => {
-          next[c.id] = c;
-        });
-        return next;
-      });
-    }
-
     return instanceId;
-  }, [groupTemplates, width, height, setAreas, setConnectors]);
-
-  /**
-   * Materializes boundary connector slots after an instance has been subdivided.
-   * Call this after subdivideGrid on a group instance.
-   */
-  const materializeInstanceConnectors = useCallback((instanceAreaId: string) => {
-    const instanceArea = areas[instanceAreaId];
-    if (!instanceArea?.groupInstance) return;
-
-    const template = groupTemplates[instanceArea.groupInstance.templateId];
-    if (!template) return;
-
-    resetPaperProject(width, height);
-
-    // Get child pieces
-    const childPieces = instanceArea.children
-      .map(id => areas[id])
-      .filter((a): a is Area => !!a && a.type === AreaType.PIECE);
-
-    if (childPieces.length === 0) return;
-
-    // Reconstruct group boundary
-    const groupBoundary = pathItemFromBoundaryData(template.cachedBoundaryPathData);
-    const transformed = applyInstanceTransform(groupBoundary, instanceArea.groupInstance.transform);
-    groupBoundary.remove();
-
-    const newConnectors = materializeBoundarySlots(template, childPieces, transformed);
-    transformed.remove();
-
-    if (newConnectors.length > 0) {
-      setConnectors(prev => {
-        const next = { ...prev };
-        for (const c of newConnectors) {
-          next[c.id] = c;
-        }
-        return next;
-      });
-    }
-  }, [areas, groupTemplates, width, height, setConnectors]);
+  }, [groupTemplates, width, height, setAreas]);
 
   /**
    * Reverts a subdivided group instance back to a single PIECE,
-   * deleting all child pieces and materialized boundary connectors.
+   * deleting all child pieces.
    */
   const resubdivideInstance = useCallback((instanceAreaId: string) => {
     const instanceArea = areas[instanceAreaId];
@@ -174,15 +132,12 @@ export function useGroupTemplates(
     const transformed = applyInstanceTransform(templateBoundary, instanceArea.groupInstance.transform);
     templateBoundary.remove();
 
-    // Remove child pieces and their connectors
+    // Remove child piece connectors
     setConnectors(prev => {
       const next = { ...prev };
       const childIdSet = new Set(instanceArea.children);
-
-      // Remove connectors owned by children or materialized from slots
       for (const cId of Object.keys(next)) {
-        const c = next[cId];
-        if (childIdSet.has(c.pieceId) || c.sourceSlotId) {
+        if (childIdSet.has(next[cId].pieceId)) {
           delete next[cId];
         }
       }
@@ -215,7 +170,9 @@ export function useGroupTemplates(
 
   /**
    * Refreshes all template caches based on current source piece state.
-   * Call when source pieces change.
+   * For subdivided instances, clips existing children to the new boundary
+   * and adds delta regions as new child pieces.
+   * Call when source pieces or their connectors change.
    */
   const refreshAllTemplateCaches = useCallback(() => {
     resetPaperProject(width, height);
@@ -225,9 +182,9 @@ export function useGroupTemplates(
       let anyChanged = false;
 
       for (const id of Object.keys(next)) {
-        const refreshed = refreshTemplateCache(next[id], areas, connectors);
-        if (refreshed) {
-          next[id] = refreshed;
+        const result = refreshTemplateCache(next[id], areas, connectors, whimsies);
+        if (result) {
+          next[id] = result.template;
           anyChanged = true;
         } else {
           // Source pieces no longer exist — remove template
@@ -239,76 +196,68 @@ export function useGroupTemplates(
       return anyChanged ? next : prev;
     });
 
-    // Update all instance boundaries to match refreshed templates
+    // Update all instance boundaries and child pieces to match refreshed templates
     setAreas(prev => {
-      const next: Record<string, Area> = { ...prev };
+      let next: Record<string, Area> = { ...prev };
       let anyChanged = false;
+
+      // We need the freshest template data — read from groupTemplates after the above setState
+      // but since setState is async, we compute template updates inline here using the same logic
+      const updatedTemplates: Record<string, { template: GroupTemplate; oldBoundaryPathData: string }> = {};
+
+      for (const templateId of Object.keys(groupTemplates)) {
+        const result = refreshTemplateCache(groupTemplates[templateId], areas, connectors, whimsies);
+        if (result) {
+          updatedTemplates[templateId] = result;
+        }
+      }
 
       for (const areaId of Object.keys(next)) {
         const area = next[areaId];
         if (!area.groupInstance) continue;
 
-        const template = groupTemplates[area.groupInstance.templateId];
-        if (!template) continue;
+        const templateId = area.groupInstance.templateId;
+        const update = updatedTemplates[templateId];
+        if (!update) continue;
 
-        const templateBoundary = pathItemFromBoundaryData(template.cachedBoundaryPathData);
-        const transformed = applyInstanceTransform(templateBoundary, area.groupInstance.transform);
-        templateBoundary.remove();
+        const { template, oldBoundaryPathData } = update;
 
-        next[areaId] = { ...area, boundary: transformed };
-        anyChanged = true;
+        if (area.children.length === 0) {
+          // Unsplit instance — just update the boundary
+          const templateBoundary = pathItemFromBoundaryData(template.cachedBoundaryPathData);
+          const transformed = applyInstanceTransform(templateBoundary, area.groupInstance.transform);
+          templateBoundary.remove();
+
+          next[areaId] = { ...area, boundary: transformed };
+          anyChanged = true;
+        } else {
+          // Subdivided instance — clip children to new boundary, add delta pieces
+          const oldBoundary = pathItemFromBoundaryData(oldBoundaryPathData);
+          const oldTransformed = applyInstanceTransform(oldBoundary, area.groupInstance.transform);
+          oldBoundary.remove();
+
+          const newBoundary = pathItemFromBoundaryData(template.cachedBoundaryPathData);
+          const newTransformed = applyInstanceTransform(newBoundary, area.groupInstance.transform);
+          newBoundary.remove();
+
+          const { updatedAreas } = updateInstanceForNewBoundary(
+            area,
+            oldTransformed,
+            newTransformed,
+            next
+          );
+
+          oldTransformed.remove();
+          newTransformed.remove();
+
+          next = updatedAreas;
+          anyChanged = true;
+        }
       }
 
       return anyChanged ? next : prev;
     });
-
-    // Re-materialize connectors for all instances
-    setConnectors(prev => {
-      const next: Record<string, Connector> = { ...prev };
-      let anyConnectorChanged = false;
-
-      // Remove old materialized connectors from all instances
-      for (const connId of Object.keys(next)) {
-        const c = next[connId];
-        if (c.sourceSlotId) {
-          delete next[connId];
-          anyConnectorChanged = true;
-        }
-      }
-
-      // Re-materialize connectors for each instance
-      for (const areaId of Object.keys(areas)) {
-        const area = areas[areaId];
-        if (!area.groupInstance) continue;
-
-        const template = groupTemplates[area.groupInstance.templateId];
-        if (!template) continue;
-
-        // For unsplit instances, materialize directly
-        if (area.children.length === 0) {
-          const newConnectors = materializeBoundarySlotsForSinglePiece(template, area);
-          for (const c of newConnectors) {
-            next[c.id] = c;
-            anyConnectorChanged = true;
-          }
-        } else {
-          // For subdivided instances, materialize via child pieces
-          const childPieces = area.children.map(id => areas[id]).filter(a => a !== undefined);
-          const templateBoundary = pathItemFromBoundaryData(template.cachedBoundaryPathData);
-          const transformed = applyInstanceTransform(templateBoundary, area.groupInstance.transform);
-          const newConnectors = materializeBoundarySlots(template, childPieces as Area[], transformed);
-          transformed.remove();
-          templateBoundary.remove();
-          for (const c of newConnectors) {
-            next[c.id] = c;
-            anyConnectorChanged = true;
-          }
-        }
-      }
-
-      return anyConnectorChanged ? next : prev;
-    });
-  }, [areas, connectors, width, height, groupTemplates, setAreas, setConnectors]);
+  }, [areas, connectors, whimsies, width, height, groupTemplates]);
 
   /**
    * Removes a group template and all its instances.
@@ -352,14 +301,12 @@ export function useGroupTemplates(
       return next;
     });
 
-    // Remove connectors belonging to removed instances
+    // Remove connectors belonging to removed instance child pieces
     setConnectors(prev => {
       const next: Record<string, Connector> = { ...prev };
-      for (const cId of Object.keys(next)) {
-        if (next[cId].sourceSlotId) {
-          delete next[cId];
-        }
-      }
+      // We can't easily know which pieces were children without areas,
+      // but on removeGroupTemplate the area cleanup above handles it.
+      // Connectors on child pieces will become dangling — clean up by pieceId absence.
       return next;
     });
 
@@ -375,7 +322,6 @@ export function useGroupTemplates(
     setGroupTemplates,
     createGroupTemplate,
     placeGroupTemplate,
-    materializeInstanceConnectors,
     resubdivideInstance,
     refreshAllTemplateCaches,
     removeGroupTemplate

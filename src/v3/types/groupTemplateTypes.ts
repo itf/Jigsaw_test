@@ -1,32 +1,7 @@
-import { Point } from '../types';
-
-/**
- * A connector slot positioned relative to a group's outer boundary.
- * These survive interior re-subdivision because they reference the group boundary,
- * not any individual piece.
- */
-export interface BoundaryConnectorSlot {
-  id: string;
-  /** Sub-path index on the group boundary (for CompoundPath) */
-  pathIndex: number;
-  /** Normalized 0-1 position on that sub-path */
-  midT: number;
-  /** World-space position — fallback for re-parameterization at corners */
-  worldPoint: Point;
-  widthPx: number;
-  extrusion: number;
-  headTemplateId: string;
-  headScale: number;
-  headRotationDeg: number;
-  useEquidistantHeadPoint?: boolean;
-  jitter?: number;
-  jitterSeed?: number;
-}
-
 /**
  * A group template captures the outer boundary of a set of pieces
- * plus the connector slots on that boundary. Multiple instances can
- * reference the same template.
+ * with connector geometry baked in (outward connectors united, inward
+ * connectors subtracted). Multiple instances can reference the same template.
  *
  * The boundary is live-linked: stored as source piece IDs and recomputed
  * when those pieces change. The cached pathData avoids recomputation on
@@ -37,10 +12,8 @@ export interface GroupTemplate {
   name: string;
   /** IDs of the pieces whose union defines the boundary */
   sourcePieceIds: string[];
-  /** Cached SVG path data — recomputed when source pieces change */
+  /** Cached SVG path data — includes baked connector geometry */
   cachedBoundaryPathData: string;
-  /** Connector slots on the outer boundary — also recomputed with the cache */
-  boundarySlots: BoundaryConnectorSlot[];
   /** Bounds of the template boundary for centering on cursor during placement */
   bounds: {
     x: number;
@@ -48,6 +21,8 @@ export interface GroupTemplate {
     width: number;
     height: number;
   };
+  /** When true, also subtract non-adjacent connectors whose bounding box overlaps the group */
+  includeNonAdjacentConnectors?: boolean;
 }
 
 /**

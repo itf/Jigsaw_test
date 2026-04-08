@@ -34,8 +34,6 @@ export interface Connector {
   jitter?: number;
   jitterSeed?: number;
   disabled?: boolean;
-  /** If set, this connector was materialized from a BoundaryConnectorSlot */
-  sourceSlotId?: string;
 }
 
 export interface Whimsy {

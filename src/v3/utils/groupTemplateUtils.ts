@@ -1,19 +1,25 @@
 import paper from 'paper';
-import { Area, AreaType, Connector, Whimsy, Point } from '../types';
-import { BoundaryConnectorSlot, GroupTemplate } from '../types/groupTemplateTypes';
-import { getClosestLocationOnBoundary, getPointOnBoundary, getNormalOnBoundary, cleanPath } from './paperUtils';
-import { findNeighborPiece } from './connectorUtils';
+import { Area, AreaType, Connector, Whimsy } from '../types';
+import { GroupTemplate } from '../types/groupTemplateTypes';
+import { cleanPath } from './paperUtils';
+import { findNeighborPiece, generateConnectorPath } from './connectorUtils';
+import { getDisconnectedComponents } from './puzzleValidation';
 
 /**
- * Computes the outer boundary of a set of pieces by iteratively uniting them.
- * Uses the same unite-then-subtract-intersection trick as mergePieces for Paper.js reliability.
+ * Computes the outer boundary of a set of pieces by iteratively uniting them,
+ * then bakes connector geometry in:
+ *   - Outward connectors (owned by group pieces, neighbor outside) → united in
+ *   - Inward connectors (owned by neighbor pieces, neighbor inside group) → subtracted
  *
- * Returns the SVG pathData string for the boundary.
+ * Uses the same unite-then-subtract-intersection trick as mergePieces for Paper.js reliability.
  * Caller must ensure Paper.js project is initialized.
  */
 export function computeGroupBoundary(
   pieceIds: string[],
-  areas: Record<string, Area>
+  areas: Record<string, Area>,
+  connectors?: Record<string, Connector>,
+  whimsies?: Whimsy[],
+  includeNonAdjacent?: boolean
 ): { pathData: string; boundary: paper.PathItem } {
   const validIds = pieceIds.filter(id => areas[id] && areas[id].type === AreaType.PIECE);
   if (validIds.length === 0) {
@@ -40,6 +46,17 @@ export function computeGroupBoundary(
 
   currentPath = cleanPath(currentPath);
 
+  if (connectors) {
+    currentPath = applyConnectorsToBoundary(
+      currentPath,
+      new Set(validIds),
+      areas,
+      connectors,
+      whimsies ?? [],
+      includeNonAdjacent ?? false
+    );
+  }
+
   return {
     pathData: currentPath.pathData,
     boundary: currentPath
@@ -47,79 +64,143 @@ export function computeGroupBoundary(
 }
 
 /**
- * Extracts external connector slots from a set of pieces.
+ * Applies connector geometry to the group boundary, mirroring processProductionState():
+ *   - Connectors owned by group pieces that point outward → united into boundary
+ *   - Connectors owned by non-group pieces that point into the group → subtracted from boundary
  *
- * A connector is "external" if its neighbor is outside the given piece set (or has no neighbor).
- * Each external connector is re-parameterized relative to the group boundary.
+ * Uses originalPiecePaths (unmodified) to generate connector paths, same as production does.
  */
-export function extractBoundarySlots(
-  pieceIds: string[],
+function applyConnectorsToBoundary(
+  boundary: paper.PathItem,
+  pieceIdSet: Set<string>,
   areas: Record<string, Area>,
   connectors: Record<string, Connector>,
-  groupBoundary: paper.PathItem
-): BoundaryConnectorSlot[] {
-  const pieceIdSet = new Set(pieceIds);
-  const slots: BoundaryConnectorSlot[] = [];
-
-  for (const connector of Object.values(connectors)) {
-    if (!pieceIdSet.has(connector.pieceId)) continue;
-
-    const piece = areas[connector.pieceId];
-    if (!piece) continue;
-
-    // Get the connector's midpoint on its piece boundary
-    const midPoint = getPointOnBoundary(piece.boundary, connector.midT, connector.pathIndex);
-    const normal = getNormalOnBoundary(piece.boundary, connector.midT, connector.pathIndex);
-
-    // Find the neighbor
-    const neighborId = findNeighborPiece(areas, connector.pieceId, midPoint, normal);
-
-    // If neighbor is inside the group, this is an internal connector — skip
-    if (neighborId && pieceIdSet.has(neighborId)) continue;
-
-    // Re-parameterize relative to the group boundary
-    const loc = getClosestLocationOnBoundary(groupBoundary, midPoint);
-
-    const slot: BoundaryConnectorSlot = {
-      id: `slot-${connector.id}`,
-      pathIndex: loc.pathIndex,
-      midT: loc.t,
-      worldPoint: { x: midPoint.x, y: midPoint.y },
-      widthPx: connector.widthPx,
-      extrusion: connector.extrusion,
-      headTemplateId: connector.headTemplateId,
-      headScale: connector.headScale,
-      headRotationDeg: connector.headRotationDeg,
-      useEquidistantHeadPoint: connector.useEquidistantHeadPoint,
-      jitter: connector.jitter,
-      jitterSeed: connector.jitterSeed
-    };
-
-    slots.push(slot);
+  whimsies: Whimsy[],
+  includeNonAdjacent: boolean
+): paper.PathItem {
+  // Snapshot original piece boundaries before any modification (mirrors production pattern)
+  const originalPiecePaths: Record<string, paper.PathItem> = {};
+  for (const id of Object.keys(areas)) {
+    if (areas[id]?.type === AreaType.PIECE) {
+      originalPiecePaths[id] = areas[id].boundary.clone({ insert: false });
+    }
   }
 
-  return slots;
+  // Pre-compute all connector paths using original boundaries
+  interface CalcConnector {
+    connector: Connector;
+    path: paper.PathItem;
+    neighborId: string | null;
+  }
+
+  const calculated: CalcConnector[] = [];
+
+  for (const connector of Object.values(connectors)) {
+    if (connector.disabled) continue;
+    const parentPath = originalPiecePaths[connector.pieceId];
+    if (!parentPath) continue;
+
+    try {
+      const result = generateConnectorPath(
+        parentPath,
+        connector.pathIndex,
+        connector.midT,
+        connector.widthPx,
+        connector.extrusion,
+        connector.headTemplateId,
+        connector.headScale,
+        connector.headRotationDeg,
+        connector.useEquidistantHeadPoint,
+        whimsies,
+        connector.jitter,
+        connector.jitterSeed ?? 0
+      );
+
+      const connectorPath = new paper.CompoundPath({
+        pathData: result.pathData,
+        insert: false
+      });
+
+      // Determine neighbor using original source path
+      const sourcePath = (parentPath instanceof paper.CompoundPath
+        ? parentPath.children[connector.pathIndex]
+        : parentPath) as paper.Path;
+      const pt = sourcePath.getPointAt(sourcePath.length * connector.midT);
+      const normal = sourcePath.getNormalAt(sourcePath.length * connector.midT);
+      const neighborId = findNeighborPiece(areas, connector.pieceId, pt, normal);
+
+      calculated.push({ connector, path: connectorPath, neighborId });
+    } catch (e) {
+      console.error('Error computing connector path for group boundary:', e);
+    }
+  }
+
+  // Apply unions (outward) and subtractions (inward)
+  for (const { connector, path, neighborId } of calculated) {
+    const ownedByGroup = pieceIdSet.has(connector.pieceId);
+
+    if (ownedByGroup) {
+      // Outward connector: neighbor is outside the group (or no neighbor)
+      const neighborInGroup = neighborId && pieceIdSet.has(neighborId);
+      if (!neighborInGroup) {
+        const united = boundary.unite(path, { insert: false });
+        boundary.remove();
+        boundary = cleanPath(united);
+      }
+      // Internal connectors (both endpoints in group) are ignored
+    } else {
+      // Connector owned by a non-group piece — check if it points into the group
+      const neighborInGroup = neighborId && pieceIdSet.has(neighborId);
+
+      if (neighborInGroup) {
+        // Direct neighbor is in the group → subtract
+        const subtracted = boundary.subtract(path, { insert: false });
+        boundary.remove();
+        boundary = cleanPath(subtracted);
+      } else if (includeNonAdjacent) {
+        // Non-adjacent mode: subtract if bounding boxes overlap
+        if (path.bounds.intersects(boundary.bounds)) {
+          const subtracted = boundary.subtract(path, { insert: false });
+          boundary.remove();
+          boundary = cleanPath(subtracted);
+        }
+      }
+    }
+
+    path.remove();
+  }
+
+  // Cleanup snapshots
+  for (const p of Object.values(originalPiecePaths)) {
+    p.remove();
+  }
+
+  return boundary;
 }
 
 /**
- * Refreshes a template's cached boundary and slots from the current state
- * of its source pieces.
+ * Refreshes a template's cached boundary from the current state of its source pieces.
+ * Captures the old boundary path data so callers can compute the delta for instance updates.
  *
- * Returns a new GroupTemplate with updated cache, or null if the source pieces
- * are no longer valid.
+ * Returns { updated template, oldBoundaryPathData } or null if source pieces are gone.
  */
 export function refreshTemplateCache(
   template: GroupTemplate,
   areas: Record<string, Area>,
-  connectors: Record<string, Connector>
-): GroupTemplate | null {
+  connectors: Record<string, Connector>,
+  whimsies: Whimsy[]
+): { template: GroupTemplate; oldBoundaryPathData: string } | null {
   const validIds = template.sourcePieceIds.filter(id => areas[id] && areas[id].type === AreaType.PIECE);
   if (validIds.length === 0) return null;
 
-  const { pathData, boundary } = computeGroupBoundary(validIds, areas);
-  const boundarySlots = extractBoundarySlots(validIds, areas, connectors, boundary);
-  
-  // Recompute bounds
+  const { pathData, boundary } = computeGroupBoundary(
+    validIds,
+    areas,
+    connectors,
+    whimsies,
+    template.includeNonAdjacentConnectors
+  );
+
   const bounds = boundary.bounds;
   const templateBounds = {
     x: bounds.x,
@@ -127,134 +208,117 @@ export function refreshTemplateCache(
     width: bounds.width,
     height: bounds.height
   };
-  
+
   boundary.remove();
 
+  const oldBoundaryPathData = template.cachedBoundaryPathData;
+
   return {
-    ...template,
-    sourcePieceIds: validIds,
-    cachedBoundaryPathData: pathData,
-    boundarySlots,
-    bounds: templateBounds
+    template: {
+      ...template,
+      sourcePieceIds: validIds,
+      cachedBoundaryPathData: pathData,
+      bounds: templateBounds
+    },
+    oldBoundaryPathData
   };
 }
 
 /**
- * Materializes boundary connector slots as real Connector objects assigned
- * to the appropriate child pieces of a group instance.
+ * Updates the children of a subdivided group instance when the template boundary changes.
  *
- * For each slot, samples slightly inward from the group boundary to determine
- * which child piece owns that edge segment, then re-parameterizes the slot
- * to that child piece's boundary.
+ * Strategy:
+ *   1. Clip all existing child pieces to the new boundary (preserves user's subdivision work)
+ *   2. Compute the delta (new area not in old boundary) and add each disjoint part as a new child piece
+ *
+ * Returns updated areas map and the IDs of newly created delta pieces.
  */
-export function materializeBoundarySlots(
-  template: GroupTemplate,
-  childPieces: Area[],
-  groupBoundary: paper.PathItem
-): Connector[] {
-  const connectors: Connector[] = [];
+export function updateInstanceForNewBoundary(
+  instanceArea: Area,
+  oldBoundaryPath: paper.PathItem,
+  newBoundaryPath: paper.PathItem,
+  areas: Record<string, Area>
+): { updatedAreas: Record<string, Area>; newPieceIds: string[] } {
+  const updatedAreas: Record<string, Area> = { ...areas };
+  const newPieceIds: string[] = [];
+  const survivingChildIds: string[] = [];
 
-  for (const slot of template.boundarySlots) {
-    // Get the world-space point on the group boundary
-    const point = getPointOnBoundary(groupBoundary, slot.midT, slot.pathIndex);
-    const normal = getNormalOnBoundary(groupBoundary, slot.midT, slot.pathIndex);
+  // Step 1: Clip existing children to new boundary
+  for (const childId of instanceArea.children) {
+    const child = areas[childId];
+    if (!child || child.type !== AreaType.PIECE) continue;
 
-    // Sample slightly inward (opposite of normal, which points outward)
-    const inwardPoint = point.subtract(normal.multiply(1.0));
+    const clipped = child.boundary.intersect(newBoundaryPath, { insert: false });
+    const components = getDisconnectedComponents(clipped);
+    clipped.remove();
 
-    // Find which child piece contains the inward sample point
-    let ownerPiece: Area | null = null;
-    for (const child of childPieces) {
-      if (child.boundary.contains(inwardPoint)) {
-        ownerPiece = child;
-        break;
-      }
-    }
-
-    if (!ownerPiece) {
-      // Fallback: try using the stored world point
-      const fallbackPoint = new paper.Point(slot.worldPoint.x, slot.worldPoint.y);
-      const fallbackInward = fallbackPoint.subtract(normal.multiply(1.0));
-      for (const child of childPieces) {
-        if (child.boundary.contains(fallbackInward)) {
-          ownerPiece = child;
-          break;
-        }
-      }
-    }
-
-    if (!ownerPiece) {
-      // Last resort: find the nearest child piece boundary
-      let minDist = Infinity;
-      for (const child of childPieces) {
-        const nearest = child.boundary.getNearestPoint(point);
-        const dist = nearest.getDistance(point);
-        if (dist < minDist) {
-          minDist = dist;
-          ownerPiece = child;
-        }
-      }
-    }
-
-    if (!ownerPiece) continue;
-
-    // Re-parameterize to the owner piece's boundary
-    const loc = getClosestLocationOnBoundary(ownerPiece.boundary, point);
-
-    connectors.push({
-      id: `materialized-${slot.id}-${Math.random().toString(36).slice(2, 6)}`,
-      pieceId: ownerPiece.id,
-      pathIndex: loc.pathIndex,
-      midT: loc.t,
-      widthPx: slot.widthPx,
-      extrusion: slot.extrusion,
-      headTemplateId: slot.headTemplateId,
-      headScale: slot.headScale,
-      headRotationDeg: slot.headRotationDeg,
-      useEquidistantHeadPoint: slot.useEquidistantHeadPoint,
-      jitter: slot.jitter,
-      jitterSeed: slot.jitterSeed,
-      sourceSlotId: slot.id
+    // Filter out empty/degenerate components
+    const validComponents = components.filter(c => {
+      const area = Math.abs((c as any).area ?? 0);
+      return area > 0.1;
     });
+
+    if (validComponents.length === 0) {
+      // Child fully removed — delete it
+      delete updatedAreas[childId];
+      validComponents.forEach(c => c.remove());
+      continue;
+    }
+
+    if (validComponents.length === 1) {
+      // Child clipped but still one piece — update boundary in-place
+      updatedAreas[childId] = { ...child, boundary: validComponents[0] };
+      survivingChildIds.push(childId);
+    } else {
+      // Child split into multiple parts — first part reuses existing ID, rest get new IDs
+      updatedAreas[childId] = { ...child, boundary: validComponents[0] };
+      survivingChildIds.push(childId);
+
+      for (let i = 1; i < validComponents.length; i++) {
+        const newId = `${childId}-split-${i}-${Math.random().toString(36).slice(2, 6)}`;
+        updatedAreas[newId] = {
+          ...child,
+          id: newId,
+          boundary: validComponents[i]
+        };
+        survivingChildIds.push(newId);
+        newPieceIds.push(newId);
+      }
+    }
   }
 
-  return connectors;
-}
+  // Step 2: Compute delta — new area not covered by old boundary
+  const delta = newBoundaryPath.subtract(oldBoundaryPath, { insert: false });
+  const deltaComponents = getDisconnectedComponents(delta);
+  delta.remove();
 
-/**
- * Materializes boundary connector slots for an unsplit group instance.
- * When a group template is placed without subdivision, it's a single piece.
- * This function creates connectors directly on that piece using the boundary slots.
- */
-export function materializeBoundarySlotsForSinglePiece(
-  template: GroupTemplate,
-  instanceArea: Area
-): Connector[] {
-  const connectors: Connector[] = [];
+  for (const comp of deltaComponents) {
+    const area = Math.abs((comp as any).area ?? 0);
+    if (area < 0.1) {
+      comp.remove();
+      continue;
+    }
 
-  for (const slot of template.boundarySlots) {
-    // For a single piece instance, we need to transform the slot parameters
-    // from the template boundary to the instance boundary
-    const connectors_for_slot: Connector = {
-      id: `materialized-${slot.id}-${Math.random().toString(36).slice(2, 6)}`,
-      pieceId: instanceArea.id,
-      pathIndex: slot.pathIndex,
-      midT: slot.midT,
-      widthPx: slot.widthPx,
-      extrusion: slot.extrusion,
-      headTemplateId: slot.headTemplateId,
-      headScale: slot.headScale,
-      headRotationDeg: slot.headRotationDeg,
-      useEquidistantHeadPoint: slot.useEquidistantHeadPoint,
-      jitter: slot.jitter,
-      jitterSeed: slot.jitterSeed,
-      sourceSlotId: slot.id
+    const newId = `delta-${instanceArea.id}-${Math.random().toString(36).slice(2, 6)}`;
+    updatedAreas[newId] = {
+      id: newId,
+      parentId: instanceArea.id,
+      type: AreaType.PIECE,
+      children: [],
+      boundary: comp,
+      color: instanceArea.color
     };
-
-    connectors.push(connectors_for_slot);
+    survivingChildIds.push(newId);
+    newPieceIds.push(newId);
   }
 
-  return connectors;
+  // Update the instance's children list
+  updatedAreas[instanceArea.id] = {
+    ...instanceArea,
+    children: survivingChildIds
+  };
+
+  return { updatedAreas, newPieceIds };
 }
 
 /**

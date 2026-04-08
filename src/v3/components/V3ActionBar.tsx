@@ -76,7 +76,7 @@ interface V3ActionBarProps {
   setMassHeadIds: (ids: string[]) => void;
   // Group template props
   groupTemplates: Record<string, GroupTemplate>;
-  onCreateGroupTemplate: (name: string, pieceIds: string[]) => void;
+  onCreateGroupTemplate: (name: string, pieceIds: string[], includeNonAdjacentConnectors: boolean) => void;
   onPlaceGroupTemplate: (templateId: string) => void;
   onRemoveGroupTemplate: (templateId: string) => void;
   onRefreshGroupTemplateCaches: () => void;

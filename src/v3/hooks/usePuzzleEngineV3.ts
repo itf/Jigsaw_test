@@ -97,7 +97,7 @@ export function usePuzzleEngineV3(): {
     { id: 'triangle', name: 'Triangle', svgData: getWhimsyTemplatePathData('triangle'), category: 'Basic' },
   ]);
 
-  const groupTemplateOps = useGroupTemplates(areas, setAreas, connectors, setConnectors, width, height);
+  const groupTemplateOps = useGroupTemplates(areas, setAreas, connectors, setConnectors, whimsies, width, height);
 
   const createRoot = useCallback((w: number, h: number) => {
     console.log('usePuzzleEngineV3: createRoot', w, h);
@@ -460,48 +460,7 @@ export function usePuzzleEngineV3(): {
         [id]: { ...current, ...updates }
       };
     });
-
-    // If this connector is sourced from a template slot, update the template slot too
-    setConnectors(prev => {
-      const current = prev[id];
-      if (!current || !current.sourceSlotId) return prev;
-
-      // Find the template that contains this slot
-      const template = Object.values(groupTemplateOps.groupTemplates).find(t => {
-        const typedT = t as any;
-        return typedT.boundarySlots?.some((s: any) => s.id === current.sourceSlotId);
-      }) as any;
-
-      if (!template) return prev;
-
-      // Update the slot in the template
-      const updatedSlots = template.boundarySlots.map((slot: any) =>
-        slot.id === current.sourceSlotId
-          ? {
-              ...slot,
-              widthPx: updates.widthPx ?? slot.widthPx,
-              extrusion: updates.extrusion ?? slot.extrusion,
-              headTemplateId: updates.headTemplateId ?? slot.headTemplateId,
-              headScale: updates.headScale ?? slot.headScale,
-              headRotationDeg: updates.headRotationDeg ?? slot.headRotationDeg,
-              useEquidistantHeadPoint: updates.useEquidistantHeadPoint ?? slot.useEquidistantHeadPoint,
-              jitter: updates.jitter ?? slot.jitter,
-              jitterSeed: updates.jitterSeed ?? slot.jitterSeed
-            }
-          : slot
-      );
-
-      const updatedTemplate = { ...template, boundarySlots: updatedSlots };
-      
-      groupTemplateOps.setGroupTemplates((prev: any) => {
-        const next = { ...prev };
-        next[template.id] = updatedTemplate;
-        return next;
-      });
-
-      return prev;
-    });
-  }, [groupTemplateOps]);
+  }, []);
 
   const removeConnector = useCallback((id: string) => {
     setConnectors(prev => {
