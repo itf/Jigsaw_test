@@ -334,14 +334,11 @@ export const V3MassConnectionTab: React.FC<V3MassConnectionTabProps> = ({
               <WhimsyLibrary
                 whimsies={whimsies}
                 onSelect={(w) => {
-                  if (!selectedHeadIds.includes(w.id)) {
-                    setSelectedHeadIds([...selectedHeadIds, w.id]);
-                  }
-                  setShowHeadLibrary(false);
+                  handleToggleHead(w.id);
                 }}
                 onUpload={() => {}}
                 onRemove={() => {}}
-                selectedId={selectedHeadIds[0]}
+                selectedIds={selectedHeadIds}
               />
             </div>
           )}

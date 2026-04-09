@@ -9,6 +9,7 @@ interface WhimsyLibraryProps {
   onUpload: (whimsy: Whimsy) => void;
   onRemove: (id: string) => void;
   selectedId?: string;
+  selectedIds?: string[];
 }
 
 export const WhimsyLibrary: React.FC<WhimsyLibraryProps> = ({
@@ -17,10 +18,16 @@ export const WhimsyLibrary: React.FC<WhimsyLibraryProps> = ({
   onUpload,
   onRemove,
   selectedId,
+  selectedIds = [],
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const isSelected = (id: string) => {
+    if (selectedId && selectedId === id) return true;
+    return selectedIds.includes(id);
+  };
 
   const filteredWhimsies = whimsies.filter(w => 
     w.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -104,40 +111,43 @@ export const WhimsyLibrary: React.FC<WhimsyLibraryProps> = ({
 
       {/* List */}
       <div className="flex-1 overflow-y-auto p-3 grid grid-cols-3 gap-2 auto-rows-max">
-        {filteredWhimsies.map(whimsy => (
-          <button
-            key={whimsy.id}
-            onClick={() => onSelect(whimsy)}
-            className={`group relative aspect-square flex flex-col items-center justify-center rounded-xl border transition-all ${
-              selectedId === whimsy.id 
-                ? 'bg-indigo-50 border-indigo-300 ring-2 ring-indigo-500/20' 
-                : 'bg-slate-50 border-slate-100 hover:border-indigo-200 hover:bg-white'
-            }`}
-          >
-            <svg 
-              viewBox="-1.2 -1.2 2.4 2.4" 
-              className={`w-10 h-10 ${selectedId === whimsy.id ? 'text-indigo-600' : 'text-slate-500 group-hover:text-indigo-500'}`}
+        {filteredWhimsies.map(whimsy => {
+          const active = isSelected(whimsy.id);
+          return (
+            <button
+              key={whimsy.id}
+              onClick={() => onSelect(whimsy)}
+              className={`group relative aspect-square flex flex-col items-center justify-center rounded-xl border transition-all ${
+                active 
+                  ? 'bg-indigo-50 border-indigo-300 ring-2 ring-indigo-500/20' 
+                  : 'bg-slate-50 border-slate-100 hover:border-indigo-200 hover:bg-white'
+              }`}
             >
-              <path d={whimsy.svgData} fill="currentColor" />
-            </svg>
-            <span className="mt-1 text-[8px] font-bold text-slate-400 uppercase truncate w-full px-1 text-center">
-              {whimsy.name}
-            </span>
-
-            {/* Delete button (only for uploaded ones) */}
-            {whimsy.category === 'Uploaded' && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onRemove(whimsy.id);
-                }}
-                className="absolute -top-1 -right-1 p-1 bg-white border border-slate-200 text-slate-400 hover:text-rose-500 rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
+              <svg 
+                viewBox="-1.2 -1.2 2.4 2.4" 
+                className={`w-10 h-10 ${active ? 'text-indigo-600' : 'text-slate-500 group-hover:text-indigo-500'}`}
               >
-                <X size={10} />
-              </button>
-            )}
-          </button>
-        ))}
+                <path d={whimsy.svgData} fill="currentColor" />
+              </svg>
+              <span className="mt-1 text-[8px] font-bold text-slate-400 uppercase truncate w-full px-1 text-center">
+                {whimsy.name}
+              </span>
+
+              {/* Delete button (only for uploaded ones) */}
+              {whimsy.category === 'Uploaded' && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRemove(whimsy.id);
+                  }}
+                  className="absolute -top-1 -right-1 p-1 bg-white border border-slate-200 text-slate-400 hover:text-rose-500 rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
+                >
+                  <X size={10} />
+                </button>
+              )}
+            </button>
+          );
+        })}
         
         {filteredWhimsies.length === 0 && (
           <div className="col-span-3 py-8 text-center">

@@ -673,8 +673,12 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
             whimsies={whimsies}
             selectedId={libraryMode === 'WHIMSY' ? whimsyTemplate : connectorHeadTemplate}
             onSelect={(w) => {
-              if (libraryMode === 'WHIMSY') setWhimsyTemplate(w.id);
-              else setConnectorHeadTemplate(w.id);
+              if (libraryMode === 'WHIMSY') {
+                setWhimsyTemplate(w.id);
+                startWhimsyPlacement();
+              } else {
+                setConnectorHeadTemplate(w.id);
+              }
               setShowWhimsyLibrary(false);
             }}
             onUpload={onUploadWhimsy}

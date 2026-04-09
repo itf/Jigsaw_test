@@ -1,6 +1,7 @@
 import paper from 'paper';
 import { Area, AreaType, Connector, Whimsy, NeckShape } from '../types';
 import { generateNeck } from './neckUtils';
+import { attachHead } from './headUtils';
 
 /** Simple seeded pseudo-random number generator (mulberry32). Returns values in [0, 1). */
 function makeRng(seed: number): () => number {
@@ -96,7 +97,7 @@ export function generateConnectorPath(
   neckShape: NeckShape = NeckShape.STANDARD,
   neckCurvature: number = 0,
   extrusionCurvature: number = 0
-): { pathData: string, basePathData: string, headCenter: paper.Point } {
+): { pathData: string, basePathData: string, headCenter: paper.Point, p1: paper.Point, p2: paper.Point } {
   const children = boundary instanceof paper.CompoundPath 
     ? (boundary.children.filter(c => c instanceof paper.Path) as paper.Path[])
     : [boundary as paper.Path];
@@ -118,14 +119,17 @@ export function generateConnectorPath(
     return sourcePath.getNormalAt(sourcePath.length * wrappedT);
   };
 
-  const p1 = getWrappedPoint(t1);
-  const p2 = getWrappedPoint(t2);
+  let p1 = getWrappedPoint(t1);
+  let p2 = getWrappedPoint(t2);
+  let currentT1 = t1;
+  let currentT2 = t2;
   const n1 = getWrappedNormal(t1);
   const n2 = getWrappedNormal(t2);
   
   if (!p1 || !p2 || !n1 || !n2) {
     // Fallback if points can't be found
-    return { pathData: '', basePathData: '', headCenter: new paper.Point(0, 0) };
+    const zero = new paper.Point(0, 0);
+    return { pathData: '', basePathData: '', headCenter: zero, p1: zero, p2: zero };
   }
   
   // 2. Calculate extrusion direction (normal to chord p1-p2)
@@ -135,7 +139,8 @@ export function generateConnectorPath(
   const midNormal = sourcePath.getNormalAt(sourcePath.length * midT);
   
   if (!midPoint || !midNormal) {
-    return { pathData: '', basePathData: '', headCenter: new paper.Point(0, 0) };
+    const zero = new paper.Point(0, 0);
+    return { pathData: '', basePathData: '', headCenter: zero, p1: zero, p2: zero };
   }
   
   // We want the normal to the chord that points in the same general direction as the boundary normal
@@ -198,11 +203,8 @@ export function generateConnectorPath(
     }
   }
 
-  // Rotate head to align with the local normal at the head center
-  // If extrusion is curved, the "up" direction at the head is different.
-  // We use the vector from midPoint to headCenter as the effective normal.
-  const headNormal = headCenter.subtract(midPoint).normalize();
-  const baseRotation = headNormal.angle + 90;
+  // Rotate head to align with the local normal at the midPoint
+  const baseRotation = midNormal.angle + 90;
   head.rotate(baseRotation + headRotationDeg, headCenter);
   
   // 3. Apply jitter to head before calculating contact points
@@ -229,8 +231,53 @@ export function generateConnectorPath(
   let pt1Head: paper.Point;
   let pt2Head: paper.Point;
 
-  // Use a ray direction that points towards the head center to handle curved extrusion
-  const rayDir = headCenter.subtract(chordMidPoint).normalize();
+  // Use the midNormal as the primary ray direction for symmetry, 
+  // but ensure it points towards the head.
+  let rayDir = midNormal.normalize();
+  if (rayDir.dot(headCenter.subtract(midPoint)) < 0) {
+    rayDir = rayDir.multiply(-1);
+  }
+
+  // Handle partial overlap by extending p1/p2 if one is inside the head
+  const p1Inside = head.contains(p1);
+  const p2Inside = head.contains(p2);
+
+  if (p1Inside && !p2Inside) {
+    // p1 is inside, p2 is outside.
+    // Find intersections between sourcePath and head to stay on the curved boundary
+    const intersections = sourcePath.getIntersections(head);
+    if (intersections.length > 0) {
+      // Find the intersection whose offset is closest to the original t1
+      const t1Offset = t1 * sourcePath.length;
+      intersections.sort((a, b) => {
+        const d1 = Math.min(Math.abs(a.offset - t1Offset), sourcePath.length - Math.abs(a.offset - t1Offset));
+        const d2 = Math.min(Math.abs(b.offset - t1Offset), sourcePath.length - Math.abs(b.offset - t1Offset));
+        return d1 - d2;
+      });
+      p1 = intersections[0].point;
+      currentT1 = intersections[0].offset / sourcePath.length;
+    }
+  } else if (p2Inside && !p1Inside) {
+    // p2 is inside, p1 is outside.
+    const intersections = sourcePath.getIntersections(head);
+    if (intersections.length > 0) {
+      // Find the intersection whose offset is closest to the original t2
+      const t2Offset = t2 * sourcePath.length;
+      intersections.sort((a, b) => {
+        const d1 = Math.min(Math.abs(a.offset - t2Offset), sourcePath.length - Math.abs(a.offset - t2Offset));
+        const d2 = Math.min(Math.abs(b.offset - t2Offset), sourcePath.length - Math.abs(b.offset - t2Offset));
+        return d1 - d2;
+      });
+      p2 = intersections[0].point;
+      currentT2 = intersections[0].offset / sourcePath.length;
+    }
+  }
+
+  // If extrusion is curved, we adjust the ray direction to point towards the head center
+  if (extrusionCurvature !== 0) {
+    const newChordMidPoint = p1.add(p2).divide(2);
+    rayDir = headCenter.subtract(newChordMidPoint).normalize();
+  }
 
   if (useEquidistantHeadPoint) {
     // New algorithm: Use ray intersection to find where the parallel sides of the neck
@@ -264,12 +311,12 @@ export function generateConnectorPath(
   const { neck: robustNeck, basePathData } = generateNeck(
     p1, p2, pt1Head, pt2Head,
     neckShape, neckCurvature, widthPx,
-    t1, t2, sourcePath,
-    head, chordMidPoint, rayDir
+    currentT1, currentT2, sourcePath,
+    rayDir
   );
 
-  // 7. Use the full connector path generated in step 5
-  const combined = robustNeck;
+  // 6. Attach head
+  const combined = attachHead(robustNeck, head, pt1Head, pt2Head, chordMidPoint, rayDir, p1, p2);
 
   const pathData = combined.pathData;
   
@@ -278,5 +325,5 @@ export function generateConnectorPath(
   head.remove();
   combined.remove();
   
-  return { pathData, basePathData, headCenter };
+  return { pathData, basePathData, headCenter, p1, p2 };
 }

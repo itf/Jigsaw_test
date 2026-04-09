@@ -4,7 +4,7 @@ import { Delaunay } from 'd3-delaunay';
 import { Area, AreaType, Operation, OperationType, PuzzleState, Point, Connector, Whimsy } from '../types';
 import { resetPaperProject } from '../utils/paperUtils';
 import { generateGridPoints, generateHexGridPoints, generateRandomPoints } from '../utils/gridUtils';
-import { getWhimsyTemplatePathData, WhimsyTemplateId } from '../utils/whimsyGallery';
+import { getWhimsyTemplatePathData, WhimsyTemplateId, DEFAULT_WHIMSIES } from '../utils/whimsyGallery';
 import { validateAndCleanState } from '../utils/puzzleValidation';
 import { findNeighborPiece, generateConnectorPath } from '../utils/connectorUtils';
 import { useStamps } from './useStamps';
@@ -93,12 +93,14 @@ export function usePuzzleEngineV3(): {
   const [width, setWidth] = useState(800);
   const [height, setHeight] = useState(600);
   const [rootAreaId, setRootAreaId] = useState<string | null>(null);
-  const [whimsies, setWhimsies] = useState<Whimsy[]>([
-    { id: 'circle', name: 'Circle', svgData: getWhimsyTemplatePathData('circle'), category: 'Basic' },
-    { id: 'star', name: 'Star', svgData: getWhimsyTemplatePathData('star'), category: 'Basic' },
-    { id: 'square', name: 'Square', svgData: getWhimsyTemplatePathData('square'), category: 'Basic' },
-    { id: 'triangle', name: 'Triangle', svgData: getWhimsyTemplatePathData('triangle'), category: 'Basic' },
-  ]);
+  const [whimsies, setWhimsies] = useState<Whimsy[]>(() => 
+    DEFAULT_WHIMSIES.map(w => ({
+      id: w.id,
+      name: w.name,
+      svgData: getWhimsyTemplatePathData(w.id),
+      category: w.category
+    }))
+  );
 
   // Memoized head metrics to avoid constant recalculation
   const headMetricsCache = useMemo(() => {

@@ -16,7 +16,6 @@ interface V3ProductionTabProps {
 export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, onResolveConflicts }) => {
   const [productionAreas, setProductionAreas] = useState<ProductionArea[]>([]);
   const [mergeThreshold, setMergeThreshold] = useState(100);
-  const [clipToNeighbors, setClipToNeighbors] = useState(false);
   const [deduplicate, setDeduplicate] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -26,7 +25,7 @@ export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, o
     // Use setTimeout to allow UI to update before heavy processing
     setTimeout(() => {
       try {
-        const processed = processProductionState(puzzleState, clipToNeighbors);
+        const processed = processProductionState(puzzleState);
         setProductionAreas(processed);
       } catch (e) {
         console.error('Production processing failed:', e);
@@ -34,7 +33,7 @@ export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, o
         setIsProcessing(false);
       }
     }, 100);
-  }, [puzzleState, clipToNeighbors]);
+  }, [puzzleState]);
 
   const handleMerge = useCallback(() => {
     if (productionAreas.length === 0) return;
@@ -166,20 +165,6 @@ export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, o
           <div className="h-8 w-px bg-slate-200 mx-2" />
 
           <div className="flex items-center gap-4 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200">
-            <label className="flex items-center gap-2 cursor-pointer group">
-              <input
-                type="checkbox"
-                checked={clipToNeighbors}
-                onChange={e => setClipToNeighbors(e.target.checked)}
-                className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
-              />
-              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider group-hover:text-slate-700 transition-colors">
-                Clip connector to neighbors
-              </span>
-            </label>
-
-            <div className="w-px h-4 bg-slate-300" />
-
             <label className="flex items-center gap-2 cursor-pointer group">
               <input
                 type="checkbox"

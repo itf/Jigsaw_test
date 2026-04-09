@@ -3,6 +3,8 @@ import { Area, AreaType, Connector, Whimsy } from '../types';
 import { cleanPath } from './paperUtils';
 import { findNeighborPiece, generateConnectorPath } from './connectorUtils';
 import { getDisconnectedComponents } from './puzzleValidation';
+import { mergePathsAtPoints } from './pathMergeUtils';
+import { mergeAllConnectorsForPiece } from './production/connectorMerging';
 
 /**
  * Computes the outer boundary of a set of pieces by iteratively uniting them,
@@ -75,95 +77,97 @@ function applyConnectorsToBoundary(
   whimsies: Whimsy[],
   includeNonAdjacent: boolean
 ): paper.PathItem {
-  const originalPiecePaths: Record<string, paper.PathItem> = {};
-  for (const id of Object.keys(areas)) {
-    if (areas[id]?.type === AreaType.PIECE) {
-      originalPiecePaths[id] = areas[id].boundary.clone({ insert: false });
-    }
-  }
+  // 1. Sequential Piece-by-Piece Processing
+  // We iterate through all pieces and apply their expanded geometry to the boundary.
+  const allConnectors = Object.values(connectors).filter(c => !c.disabled);
+  const pieceIds = Object.keys(areas).filter(id => areas[id].type === AreaType.PIECE);
 
+  // We need to keep track of neighbor IDs for connectors
   interface CalcConnector {
     connector: Connector;
     path: paper.PathItem;
     neighborId: string | null;
   }
-
   const calculated: CalcConnector[] = [];
 
-  for (const connector of Object.values(connectors)) {
-    if (connector.disabled) continue;
-    const parentPath = originalPiecePaths[connector.pieceId];
-    if (!parentPath) continue;
+  for (const pieceId of pieceIds) {
+    const originalPath = areas[pieceId].boundary;
+    const pieceConnectors = allConnectors.filter(c => c.pieceId === pieceId);
+    const ownedByGroup = pieceIdSet.has(pieceId);
 
-    try {
-      const result = generateConnectorPath(
-        parentPath,
-        connector.pathIndex,
-        connector.midT,
-        connector.widthPx,
-        connector.extrusion,
-        connector.headTemplateId,
-        connector.headScale,
-        connector.headRotationDeg,
-        connector.useEquidistantHeadPoint,
-        whimsies,
-        connector.jitter,
-        connector.jitterSeed ?? 0
+    // A. Calculate the fully expanded piece (Original + its own Tabs)
+    // We use the original path for stable placement.
+    const expandedPiece = mergeAllConnectorsForPiece(originalPath, originalPath, pieceConnectors, whimsies);
+
+    // B. Process connectors for this piece to determine if they point into/out of the group
+    for (const connector of pieceConnectors) {
+      try {
+        const result = generateConnectorPath(
+          originalPath,
+          connector.pathIndex,
+          connector.midT,
+          connector.widthPx,
+          connector.extrusion,
+          connector.headTemplateId,
+          connector.headScale,
+          connector.headRotationDeg,
+          connector.useEquidistantHeadPoint,
+          whimsies,
+          connector.jitter,
+          connector.jitterSeed ?? 0,
+          connector.neckShape,
+          connector.neckCurvature,
+          connector.extrusionCurvature
+        );
+
+        const connectorPath = new paper.CompoundPath({
+          pathData: result.pathData,
+          insert: false
+        });
+
+        const sourcePath = (originalPath instanceof paper.CompoundPath
+          ? originalPath.children[connector.pathIndex]
+          : originalPath) as paper.Path;
+        const pt = sourcePath.getPointAt(sourcePath.length * connector.midT);
+        const normal = sourcePath.getNormalAt(sourcePath.length * connector.midT);
+        const neighborId = findNeighborPiece(areas, connector.pieceId, pt, normal);
+
+        calculated.push({ connector, path: connectorPath, neighborId });
+
+        // If this piece is in the group, we unite outward connectors into the boundary
+        if (ownedByGroup) {
+          const neighborInGroup = neighborId && pieceIdSet.has(neighborId);
+          if (!neighborInGroup) {
+            const united = boundary.unite(connectorPath, { insert: false });
+            boundary.remove();
+            boundary = cleanPath(united);
+          }
+        }
+      } catch (e) {
+        console.error('Error computing connector path for group boundary:', e);
+      }
+    }
+
+    // C. If this piece is OUTSIDE the group, we subtract it from the boundary if it has inward connectors
+    if (!ownedByGroup) {
+      const pieceCalculated = calculated.filter(c => c.connector.pieceId === pieceId);
+      const hasInwardConnector = pieceCalculated.some(({ neighborId }) => 
+        neighborId && pieceIdSet.has(neighborId)
       );
 
-      const connectorPath = new paper.CompoundPath({
-        pathData: result.pathData,
-        insert: false
-      });
-
-      const sourcePath = (parentPath instanceof paper.CompoundPath
-        ? parentPath.children[connector.pathIndex]
-        : parentPath) as paper.Path;
-      const pt = sourcePath.getPointAt(sourcePath.length * connector.midT);
-      const normal = sourcePath.getNormalAt(sourcePath.length * connector.midT);
-      const neighborId = findNeighborPiece(areas, connector.pieceId, pt, normal);
-
-      calculated.push({ connector, path: connectorPath, neighborId });
-    } catch (e) {
-      console.error('Error computing connector path for group boundary:', e);
+      if (hasInwardConnector || (includeNonAdjacent && expandedPiece.bounds.intersects(boundary.bounds))) {
+        const subtracted = boundary.subtract(expandedPiece, { insert: false });
+        boundary.remove();
+        boundary = cleanPath(subtracted);
+      }
     }
+
+    expandedPiece.remove();
   }
 
-  for (const { connector, path, neighborId } of calculated) {
-    const ownedByGroup = pieceIdSet.has(connector.pieceId);
-
-    if (ownedByGroup) {
-      const neighborInGroup = neighborId && pieceIdSet.has(neighborId);
-      if (!neighborInGroup) {
-        // Outward connector: owned by group piece, neighbor outside → unite in
-        const united = boundary.unite(path, { insert: false });
-        boundary.remove();
-        boundary = cleanPath(united);
-      } else {
-        // Internal connector: both owner and neighbor are in the group.
-        // Always unite — the connector may overflow the group's piece union boundary.
-        const united = boundary.unite(path, { insert: false });
-        boundary.remove();
-        boundary = cleanPath(united);
-      }
-    } else {
-      const neighborInGroup = neighborId && pieceIdSet.has(neighborId);
-      if (neighborInGroup) {
-        const subtracted = boundary.subtract(path, { insert: false });
-        boundary.remove();
-        boundary = cleanPath(subtracted);
-      } else if (includeNonAdjacent && path.bounds.intersects(boundary.bounds)) {
-        const subtracted = boundary.subtract(path, { insert: false });
-        boundary.remove();
-        boundary = cleanPath(subtracted);
-      }
-    }
-
+  // Cleanup
+  for (const { path } of calculated) {
     path.remove();
-  }
-
-  for (const p of Object.values(originalPiecePaths)) {
-    p.remove();
   }
 
   return boundary;

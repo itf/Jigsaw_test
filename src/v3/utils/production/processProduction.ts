@@ -4,6 +4,8 @@ import { generateConnectorPath, findNeighborPiece } from '../connectorUtils';
 import { cleanPath } from '../paperUtils';
 import { getDisconnectedComponents } from '../puzzleValidation';
 import { subtractStampsFromPieces } from '../groupTemplateUtils';
+import { mergePathsAtPoints } from '../pathMergeUtils';
+import { mergeAllConnectorsForPiece } from './connectorMerging';
 
 export interface ProductionArea {
   id: string;
@@ -15,11 +17,11 @@ export interface ProductionArea {
 /**
  * Processes the puzzle state for production:
  * 1. Pre-calculates all connector paths using original boundaries.
- * 2. Unites connectors with their parent pieces.
- * 3. Subtracts connectors from neighboring pieces (either all or clipped to neighbor).
+ * 2. Unites ALL connectors with their parent pieces (Pass 1).
+ * 3. Subtracts pieces from each other to create the interlocking effect (Pass 2).
  * 4. Handles any resulting piece splits.
  */
-export function processProductionState(puzzleState: PuzzleState, clipToNeighbors: boolean = false): ProductionArea[] {
+export function processProductionState(puzzleState: PuzzleState): ProductionArea[] {
   const { areas, connectors, width, height } = puzzleState;
   
   // Initialize a temporary Paper.js project for processing
@@ -45,113 +47,47 @@ export function processProductionState(puzzleState: PuzzleState, clipToNeighbors
   });
 
   // 1b. Subtract STAMP instance boundaries from overlapping non-stamp pieces
-  // (stamps render as overlays during editing; this is where the boolean subtraction happens)
   subtractStampsFromPieces(piecePaths, areas);
 
-  // 2. Pre-calculate all connector paths using ORIGINAL boundaries (skip disabled connectors)
-  const calculatedConnectors = Object.values(connectors).filter(c => !c.disabled).map(c => {
-    const parentPiece = originalPiecePaths[c.pieceId];
-    if (!parentPiece) return null;
+  // 2. Sequential Piece-by-Piece Processing
+  // For each piece:
+  //   A. Merge all its connectors into its CURRENT state (which may have notches).
+  //   B. Subtract this expanded piece from ALL other pieces.
+  // This ensures that every piece interlocks perfectly and no notches are lost.
+  const pieceIds = Object.keys(piecePaths);
+  const allConnectors = Object.values(connectors).filter(c => !c.disabled);
 
-    try {
-      const result = generateConnectorPath(
-        parentPiece,
-        c.pathIndex,
-        c.midT,
-        c.widthPx,
-        c.extrusion,
-        c.headTemplateId,
-        c.headScale,
-        c.headRotationDeg,
-        c.useEquidistantHeadPoint,
-        puzzleState.whimsies,
-        c.jitter,
-        c.jitterSeed || 0,
-        c.neckShape,
-        c.neckCurvature,
-        c.extrusionCurvature
-      );
+  pieceIds.forEach(pieceId => {
+    const originalPath = originalPiecePaths[pieceId];
+    const pieceConnectors = allConnectors.filter(c => c.pieceId === pieceId);
+    
+    // A. Merge all connectors into the CURRENT piece path (which might have notches)
+    // We use the originalPath for stable calculation of connector positions.
+    const currentPath = piecePaths[pieceId];
+    const expandedPiece = mergeAllConnectorsForPiece(currentPath, originalPath, pieceConnectors, puzzleState.whimsies);
+    
+    currentPath.remove();
+    piecePaths[pieceId] = expandedPiece;
 
-      const connectorPath = new paper.CompoundPath({
-        pathData: result.pathData,
-        insert: false
-      });
-
-      // Find neighbor piece
-      const sourcePath = (parentPiece instanceof paper.CompoundPath 
-        ? parentPiece.children[c.pathIndex] 
-        : parentPiece) as paper.Path;
+    // B. Subtract this expanded piece from ALL other pieces
+    const expandedBounds = expandedPiece.bounds;
+    pieceIds.forEach(otherId => {
+      if (otherId === pieceId) return;
+      const otherPiece = piecePaths[otherId];
       
-      const pt = sourcePath.getPointAt(sourcePath.length * c.midT);
-      const normal = sourcePath.getNormalAt(sourcePath.length * c.midT);
-      const neighborId = findNeighborPiece(areas, c.pieceId, pt, normal);
-
-      return {
-        id: c.id,
-        pieceId: c.pieceId,
-        neighborId,
-        path: connectorPath
-      };
-    } catch (e) {
-      console.error('Error pre-calculating connector:', e);
-      return null;
-    }
-  }).filter(c => c !== null) as { id: string, pieceId: string, neighborId: string | null, path: paper.PathItem }[];
-
-  // 3. Process unions and subtractions
-  calculatedConnectors.forEach(c => {
-    const parentPiece = piecePaths[c.pieceId];
-    if (!parentPiece) return;
-
-    let connectorToUse = c.path;
-
-    // Strategy: Clip to neighbor if requested
-    if (clipToNeighbors && c.neighborId && piecePaths[c.neighborId]) {
-      const neighborPiece = piecePaths[c.neighborId];
-      // Clip connector to the union of parent and neighbor so it doesn't bleed
-      const mask = parentPiece.unite(neighborPiece);
-      const clipped = connectorToUse.intersect(mask);
-      mask.remove();
-      connectorToUse = clipped;
-    }
-
-    // Unite with parent
-    const united = parentPiece.unite(connectorToUse);
-    parentPiece.remove();
-    piecePaths[c.pieceId] = cleanPath(united);
-
-    // Subtract from neighbors
-    if (!clipToNeighbors) {
-      // Subtract from EVERY other piece (Default), using bbox pre-filter
-      const connectorBounds = connectorToUse.bounds;
-      Object.keys(piecePaths).forEach(otherId => {
-        if (otherId === c.pieceId) return;
-        const otherPiece = piecePaths[otherId];
-        // Fast reject: skip if bounding boxes don't intersect
-        if (!otherPiece.bounds.intersects(connectorBounds)) return;
-        const subtracted = otherPiece.subtract(connectorToUse);
+      // Only subtract if bounds intersect to save performance
+      if (otherPiece.bounds.intersects(expandedBounds)) {
+        const subtracted = otherPiece.subtract(expandedPiece);
         otherPiece.remove();
         piecePaths[otherId] = cleanPath(subtracted);
-      });
-    } else if (c.neighborId && piecePaths[c.neighborId]) {
-      // Subtract only from the direct neighbor
-      const neighborPiece = piecePaths[c.neighborId];
-      const subtracted = neighborPiece.subtract(connectorToUse);
-      neighborPiece.remove();
-      piecePaths[c.neighborId] = cleanPath(subtracted);
-    }
-
-    // If we created a clipped copy, remove it
-    if (connectorToUse !== c.path) {
-      connectorToUse.remove();
-    }
+      }
+    });
   });
 
-  // Cleanup pre-calculated paths and original copies
-  calculatedConnectors.forEach(c => c.path.remove());
+  // Cleanup
   Object.values(originalPiecePaths).forEach(p => p.remove());
 
-  // 4. Handle splits and convert to final ProductionArea format
+  // 5. Handle splits and convert to final ProductionArea format
   const finalAreas: ProductionArea[] = [];
   
   Object.keys(piecePaths).forEach(id => {

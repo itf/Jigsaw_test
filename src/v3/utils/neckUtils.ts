@@ -1,36 +1,9 @@
 import paper from 'paper';
 import { NeckShape } from '../types';
+import { getExactSegment } from './pathMergeUtils';
 
 /**
- * Extracts the exact Bezier segment of a path between two offsets.
- */
-function getExactSegment(path: paper.Path, offset1: number, offset2: number, reverse: boolean = false): paper.Path {
-  const len = path.length;
-  const o1 = (offset1 + len * 2) % len;
-  const o2 = (offset2 + len * 2) % len;
-
-  const clone = path.clone({ insert: false });
-  if (clone.closed) {
-    // Opening a closed path at o1 makes it an open path starting/ending at o1
-    clone.splitAt(o1);
-  } else {
-    // For open paths, we might need to handle wrapping manually or just split
-    // But piece/head boundaries are usually closed.
-  }
-
-  // Now the path starts at o1. Find the new relative offset for o2.
-  let newO2 = (o2 - o1 + len) % len;
-  if (newO2 === 0 && offset1 !== offset2) newO2 = len;
-
-  const secondPart = clone.splitAt(newO2);
-  if (secondPart) secondPart.remove();
-  
-  if (reverse) clone.reverse();
-  return clone;
-}
-
-/**
- * Generates a neck path and a cleaning polygon based on the 4 contact points.
+ * Generates a neck path based on the 4 contact points.
  */
 export function generateNeck(
   p1: paper.Point,
@@ -43,10 +16,8 @@ export function generateNeck(
   t1: number,
   t2: number,
   sourcePath: paper.Path,
-  head: paper.PathItem,
-  chordMidPoint: paper.Point,
   rayDir: paper.Point
-): { neck: paper.PathItem, basePathData: string } {
+): { neck: paper.Path, basePathData: string } {
   const neck = new paper.Path({ insert: false });
   
   // A. Bottom edge: Exact segment from piece boundary
@@ -54,89 +25,44 @@ export function generateNeck(
   const pieceSegment = getExactSegment(sourcePath, t1 * pieceLen, t2 * pieceLen);
   const basePathData = pieceSegment.pathData;
   
-  // Push into piece for robustness (Commented out for testing)
-  // pieceSegment.translate(rayDir.multiply(-1));
-  
-  // Add piece segment to neck
-  neck.addSegments(pieceSegment.segments);
-  pieceSegment.remove();
+  // B. Side 2: pt1Head to p1 (Left side when looking from base to head)
+  neck.add(pt1Head);
+  // The inward direction for Side 2 is perpendicular to rayDir (pointing right)
+  const inwardDir2 = new paper.Point(rayDir.y, -rayDir.x); 
+  addNeckSide(neck, pt1Head, p1, neckShape, neckCurvature, widthPx, inwardDir2);
 
-  const curveDir = p2.subtract(p1).normalize();
+  // C. Bottom: p1 to p2
+  neck.join(pieceSegment);
 
-  // B. Side 1: p2 to pt2Head
-  // addNeckSide(neck, p2.subtract(rayDir), pt2Head.add(rayDir), p1, neckShape, neckCurvature, widthPx, curveDir);
-  addNeckSide(neck, p2, pt2Head, p1, neckShape, neckCurvature, widthPx, curveDir);
-  
-  // C. Top edge: Exact segment from head boundary
-  const headPath = (head instanceof paper.CompoundPath ? head.children[0] : head) as paper.Path;
-  if (headPath && headPath.length > 0) {
-    const loc1 = headPath.getNearestLocation(pt1Head);
-    const loc2 = headPath.getNearestLocation(pt2Head);
-    const offset1 = loc1.offset;
-    const offset2 = loc2.offset;
-    const hLen = headPath.length;
+  // D. Side 1: p2 to pt2Head (Right side when looking from base to head)
+  // The inward direction for Side 1 is the opposite (pointing left)
+  const inwardDir1 = new paper.Point(-rayDir.y, rayDir.x);
+  addNeckSide(neck, p2, pt2Head, neckShape, neckCurvature, widthPx, inwardDir1);
 
-    let distCW = offset1 - offset2;
-    if (distCW < 0) distCW += hLen;
-    let distCCW = distCW - hLen;
-
-    const midCW = headPath.getPointAt((offset2 + distCW / 2) % hLen);
-    const midCCW = headPath.getPointAt((offset2 + distCCW / 2 + hLen) % hLen);
-
-    const useCW = midCW.getDistance(chordMidPoint) < midCCW.getDistance(chordMidPoint);
-    
-    // Extract exact segment (the outer part of the head)
-    const headSegment = useCW 
-      ? getExactSegment(headPath, offset1, offset2, true)
-      : getExactSegment(headPath, offset2, offset1, false);
-    
-    neck.join(headSegment);
-  } else {
-    neck.add(pt1Head);
-  }
-
-  // D. Side 2: pt1Head to p1
-  addNeckSide(neck, pt1Head, p1, p2, neckShape, neckCurvature, widthPx, curveDir);
-
-  neck.closed = true;
-
-  // Handle holes if head was a CompoundPath
-  let finalConnector: paper.PathItem = neck;
-  if (head instanceof paper.CompoundPath && head.children.length > 1) {
-    const holes = head.children.slice(1).map(c => c.clone({ insert: false }));
-    finalConnector = new paper.CompoundPath({
-      children: [neck, ...holes],
-      insert: false
-    });
-  }
-
-  return { neck: finalConnector, basePathData };
+  // Return open path pt1Head -> ... -> pt2Head
+  return { neck, basePathData };
 }
 
 function addNeckSide(
   path: paper.Path,
   start: paper.Point,
   end: paper.Point,
-  oppositeBase: paper.Point,
   shape: NeckShape,
   curvature: number,
   widthPx: number,
-  curveDir: paper.Point
+  inwardDir: paper.Point
 ) {
   if (shape === NeckShape.STANDARD) {
     path.lineTo(end);
   } else if (shape === NeckShape.TAPERED) {
     const mid = start.add(end).divide(2);
-    // For tapered, we bow inward towards the center of the neck.
-    // Side 1 (p2 to pt2Head) bows towards p1.
-    // Side 2 (pt1Head to p1) bows towards p2.
-    const inwardNormal = oppositeBase.subtract(start).normalize();
-    const control = mid.add(inwardNormal.multiply(widthPx * 0.25));
+    // Bow inward towards the center of the neck.
+    const control = mid.add(inwardDir.multiply(widthPx * 0.25));
     path.quadraticCurveTo(control, end);
   } else if (shape === NeckShape.CURVED) {
     const mid = start.add(end).divide(2);
-    // Both sides curve in the same direction (curveDir = p2 - p1)
-    const control = mid.add(curveDir.multiply(widthPx * 0.5 * curvature));
-    path.quadraticCurveTo(control, end);
+    // Both sides curve in the same direction (inwardDir for Side 1 is outward for Side 2)
+    // We use inwardDir as a reference.
+    path.quadraticCurveTo(mid.add(inwardDir.multiply(widthPx * 0.5 * curvature)), end);
   }
 }
