@@ -9,6 +9,8 @@ import { validateAndCleanState } from '../utils/puzzleValidation';
 import { findNeighborPiece, generateConnectorPath } from '../utils/connectorUtils';
 import { useStamps } from './useStamps';
 
+import { getNeighborDepth } from '../utils/relativeUtils';
+
 const COLORS = [
   '#f87171', '#fb923c', '#fbbf24', '#facc15', '#a3e635', '#4ade80',
   '#34d399', '#2dd4bf', '#22d3ee', '#38bdf8', '#60a5fa', '#818cf8',
@@ -54,10 +56,14 @@ function pickUniqueColor(neighborColors: Set<string>): string {
 type MassConnectorParams = {
   pieceIds: string[];
   widthRange: [number, number];
+  widthRelative: boolean;
   extrusionRange: [number, number];
-  positionOffsetRange: [number, number];
+  extrusionRelative: boolean;
+  positionRange: [number, number];
   headTemplateIds: string[];
   headScaleRange: [number, number];
+  headScaleRelative: boolean;
+  useActualAreaForScale: boolean;
   headRotationRange: [number, number];
   jitterRange: [number, number];
 };
@@ -94,6 +100,26 @@ export function usePuzzleEngineV3(): {
     { id: 'triangle', name: 'Triangle', svgData: getWhimsyTemplatePathData('triangle'), category: 'Basic' },
   ]);
 
+  // Memoized head metrics to avoid constant recalculation
+  const headMetricsCache = useMemo(() => {
+    const cache: Record<string, { actualArea: number, bboxArea: number, bboxWidth: number, bboxHeight: number }> = {};
+    
+    const calculate = (id: string, svgData: string) => {
+      const path = new paper.CompoundPath({ pathData: svgData, insert: false });
+      const actualArea = Math.abs((path as any).area || 0);
+      const bounds = path.bounds;
+      const bboxArea = bounds.width * bounds.height;
+      path.remove();
+      return { actualArea, bboxArea, bboxWidth: bounds.width, bboxHeight: bounds.height };
+    };
+
+    whimsies.forEach(w => {
+      cache[w.id] = calculate(w.id, w.svgData);
+    });
+
+    return cache;
+  }, [whimsies]);
+
   const stampOps = useStamps(areas, setAreas, connectors, setConnectors, whimsies, width, height);
 
   const createRoot = useCallback((w: number, h: number) => {
@@ -128,7 +154,7 @@ export function usePuzzleEngineV3(): {
 
     setAreas(prev => {
       const parent = prev[parentId];
-      if (!parent || parent.type !== AreaType.PIECE) return prev;
+      if (!parent || (parent.type !== AreaType.PIECE && parent.type !== AreaType.STAMP)) return prev;
 
       resetPaperProject(width, height);
       const parentPath = parent.boundary.clone();
@@ -458,23 +484,18 @@ export function usePuzzleEngineV3(): {
     setWhimsies(prev => prev.filter(w => w.id !== id));
   }, []);
 
-  const generateMassConnectors = useCallback((params: {
-    pieceIds: string[],
-    widthRange: [number, number],
-    extrusionRange: [number, number],
-    positionOffsetRange: [number, number],
-    headTemplateIds: string[],
-    headScaleRange: [number, number],
-    headRotationRange: [number, number],
-    jitterRange: [number, number]
-  }): Record<string, Connector> => {
+  const generateMassConnectors = useCallback((params: MassConnectorParams): Record<string, Connector> => {
     const {
       pieceIds,
       widthRange,
+      widthRelative,
       extrusionRange,
-      positionOffsetRange,
+      extrusionRelative,
+      positionRange,
       headTemplateIds,
       headScaleRange,
+      headScaleRelative,
+      useActualAreaForScale,
       headRotationRange,
       jitterRange
     } = params;
@@ -491,7 +512,7 @@ export function usePuzzleEngineV3(): {
         : [boundary as paper.Path];
 
       children.forEach((path, pathIndex) => {
-        const samples = 20;
+        const samples = 200;
         const neighborSegments = new Map<string, { tStart: number, tEnd: number }[]>();
 
         let currentNeighbor: string | null = null;
@@ -515,30 +536,81 @@ export function usePuzzleEngineV3(): {
 
         neighborSegments.forEach((segments, neighborId) => {
           if (id > neighborId) return;
+          const neighborArea = areas[neighborId];
+          if (!neighborArea) return;
 
           segments.forEach(seg => {
-            const baseMidT = (seg.tStart + seg.tEnd) / 2;
             const rand = (range: [number, number]) => range[0] + Math.random() * (range[1] - range[0]);
 
-            const jitterPx = rand(positionOffsetRange);
-            const jitterT = path.length > 0 ? jitterPx / path.length : 0;
-            let midT = baseMidT + (Math.random() - 0.5) * 2 * jitterT;
+            // Calculate shared boundary length if needed
+            let sharedLen = 0;
+            if (widthRelative || true) { 
+              sharedLen = path.length * (seg.tEnd - seg.tStart);
+            }
+
+            // Position (0 to 1 range, 0.5 is middle)
+            const posVal = rand(positionRange) / 100; 
+            let midT = seg.tStart + posVal * (seg.tEnd - seg.tStart);
             midT = ((midT % 1) + 1) % 1;
 
             const headTemplateId = headTemplateIds[Math.floor(Math.random() * headTemplateIds.length)];
             const connectorId = `connector-${Math.random().toString(36).slice(2, 6)}`;
+
+            // Width
+            let widthPx = rand(widthRange);
+            if (widthRelative) {
+              widthPx = widthPx * sharedLen;
+            }
+
+            // Extrusion
+            let extrusion = rand(extrusionRange);
+            if (extrusionRelative) {
+              const pt = path.getPointAt(path.length * midT);
+              const normal = path.getNormalAt(path.length * midT);
+              const depth = getNeighborDepth(neighborArea.boundary, pt, normal);
+              extrusion = (extrusion / 100) * depth;
+            }
+
+            // Scale
+            let headScale = rand(headScaleRange);
+            if (headScaleRelative) {
+              const metrics = headMetricsCache[headTemplateId];
+              const neighborAreaVal = Math.abs(neighborArea.boundary.area);
+              
+              if (metrics) {
+                const baseArea = useActualAreaForScale ? metrics.actualArea : metrics.bboxArea;
+                if (baseArea > 0) {
+                  // targetArea = (headScale / 100) * neighborAreaVal
+                  // targetArea = baseArea * (12 * actualScale)^2
+                  // actualScale = sqrt(targetArea / (144 * baseArea))
+                  headScale = Math.sqrt(((headScale / 100) * neighborAreaVal) / (144 * baseArea));
+                }
+              }
+            }
+
+            // Relative Jitter
+            const jitterVal = rand(jitterRange);
+            let finalJitter = jitterVal;
+            const metrics = headMetricsCache[headTemplateId];
+            if (metrics) {
+              // Proportional to bounding box size * scale
+              // avgDim is ~2 for normalized heads. 
+              // We want jitterVal=10 to be ~100% of head size (points move +/- 50%)
+              const avgDim = (metrics.bboxWidth + metrics.bboxHeight) / 2;
+              finalJitter = jitterVal * avgDim * 1.2 * headScale; 
+            }
 
             generated[connectorId] = {
               id: connectorId,
               pieceId: id,
               pathIndex,
               midT,
-              widthPx: rand(widthRange),
-              extrusion: rand(extrusionRange),
+              widthPx,
+              extrusion,
               headTemplateId,
-              headScale: rand(headScaleRange),
+              headScale,
               headRotationDeg: rand(headRotationRange),
-              jitter: rand(jitterRange),
+              jitter: finalJitter,
               jitterSeed: (Math.random() * 0xffffffff) >>> 0,
               useEquidistantHeadPoint: true
             };
@@ -548,18 +620,9 @@ export function usePuzzleEngineV3(): {
     });
 
     return generated;
-  }, [areas]);
+  }, [areas, whimsies, headMetricsCache]);
 
-  const addMassConnectors = useCallback((params: {
-    pieceIds: string[],
-    widthRange: [number, number],
-    extrusionRange: [number, number],
-    positionOffsetRange: [number, number],
-    headTemplateIds: string[],
-    headScaleRange: [number, number],
-    headRotationRange: [number, number],
-    jitterRange: [number, number]
-  }) => {
+  const addMassConnectors = useCallback((params: MassConnectorParams) => {
     const generated = generateMassConnectors(params);
     setConnectors(prev => ({ ...prev, ...generated }));
   }, [generateMassConnectors]);

@@ -66,7 +66,10 @@ export function processProductionState(puzzleState: PuzzleState, clipToNeighbors
         c.useEquidistantHeadPoint,
         puzzleState.whimsies,
         c.jitter,
-        c.jitterSeed || 0
+        c.jitterSeed || 0,
+        c.neckShape,
+        c.neckCurvature,
+        c.extrusionCurvature
       );
 
       const connectorPath = new paper.CompoundPath({

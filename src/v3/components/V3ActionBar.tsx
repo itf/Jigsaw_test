@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { Grid, Hexagon, Shuffle, Link as LinkIcon, Download, RefreshCw, Trash2, X, Layers, Merge, Circle, Star, Sparkles, Plus, Book, Network, Crop, Copy } from 'lucide-react';
 import { Tab } from '../../v2/constants';
-import { WheelSlider } from './ui/WheelSlider';
+import { InfiniteSlider } from './controls/InfiniteSlider';
 import { WhimsyLibrary } from './WhimsyLibrary';
-import { Whimsy } from '../types';
+import { Whimsy, NeckShape } from '../types';
 import { V3MassConnectionTab } from './V3MassConnectionTab';
 import { StampPanel } from './StampPanel';
 import { Area } from '../types';
@@ -60,6 +60,12 @@ interface V3ActionBarProps {
   onRemoveConnector: (id: string) => void;
   connectorJitter: number;
   setConnectorJitter: (v: number) => void;
+  connectorNeckShape: NeckShape;
+  setConnectorNeckShape: (v: NeckShape) => void;
+  connectorNeckCurvature: number;
+  setConnectorNeckCurvature: (v: number) => void;
+  connectorExtrusionCurvature: number;
+  setConnectorExtrusionCurvature: (v: number) => void;
   onAddMassConnectors: (params: any) => void;
   onPreviewMassConnectors: (params: any) => void;
   onCommitPreviewConnectors: () => void;
@@ -74,6 +80,26 @@ interface V3ActionBarProps {
   onToggleRectSelect: () => void;
   massHeadIds: string[];
   setMassHeadIds: (ids: string[]) => void;
+  massWidthRange: [number, number];
+  setMassWidthRange: (val: [number, number]) => void;
+  massWidthRelative: boolean;
+  setMassWidthRelative: (val: boolean) => void;
+  massExtrusionRange: [number, number];
+  setMassExtrusionRange: (val: [number, number]) => void;
+  massExtrusionRelative: boolean;
+  setMassExtrusionRelative: (val: boolean) => void;
+  massPositionRange: [number, number];
+  setMassPositionRange: (val: [number, number]) => void;
+  massHeadScaleRange: [number, number];
+  setMassHeadScaleRange: (val: [number, number]) => void;
+  massHeadScaleRelative: boolean;
+  setMassHeadScaleRelative: (val: boolean) => void;
+  massUseActualAreaForScale: boolean;
+  setMassUseActualAreaForScale: (val: boolean) => void;
+  massHeadRotationRange: [number, number];
+  setMassHeadRotationRange: (val: [number, number]) => void;
+  massJitterRange: [number, number];
+  setMassJitterRange: (val: [number, number]) => void;
   // Stamp props
   areas: Record<string, Area>;
   onCreateStamp: (name: string, pieceIds: string[], includeNonAdjacentConnectors: boolean) => void;
@@ -148,6 +174,12 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
   onRemoveConnector,
   connectorJitter,
   setConnectorJitter,
+  connectorNeckShape,
+  setConnectorNeckShape,
+  connectorNeckCurvature,
+  setConnectorNeckCurvature,
+  connectorExtrusionCurvature,
+  setConnectorExtrusionCurvature,
   onAddMassConnectors,
   onPreviewMassConnectors,
   onCommitPreviewConnectors,
@@ -162,6 +194,26 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
   onToggleRectSelect,
   massHeadIds,
   setMassHeadIds,
+  massWidthRange,
+  setMassWidthRange,
+  massWidthRelative,
+  setMassWidthRelative,
+  massExtrusionRange,
+  setMassExtrusionRange,
+  massExtrusionRelative,
+  setMassExtrusionRelative,
+  massPositionRange,
+  setMassPositionRange,
+  massHeadScaleRange,
+  setMassHeadScaleRange,
+  massHeadScaleRelative,
+  setMassHeadScaleRelative,
+  massUseActualAreaForScale,
+  setMassUseActualAreaForScale,
+  massHeadRotationRange,
+  setMassHeadRotationRange,
+  massJitterRange,
+  setMassJitterRange,
   areas,
   onCreateStamp,
   onPlaceStamp,
@@ -306,22 +358,24 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
                       : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-300'
                   }`}
                 >
-                  {currentWhimsy ? (
-                    <svg viewBox="0 0 100 100" className="w-3 h-3">
-                      <path d={currentWhimsy.svgData} fill="currentColor" />
-                    </svg>
-                  ) : <Book className="w-3 h-3" />}
-                  {currentWhimsy?.name || 'Library'}
+                  <div className="w-4 h-4 flex items-center justify-center shrink-0">
+                    {currentWhimsy ? (
+                      <svg viewBox="-1.2 -1.2 2.4 2.4" className="w-full h-full">
+                        <path d={currentWhimsy.svgData} fill="currentColor" />
+                      </svg>
+                    ) : <Book className="w-3 h-3" />}
+                  </div>
+                  <span className="truncate max-w-[80px]">{currentWhimsy?.name || 'Library'}</span>
                 </button>
               </div>
 
-              <WheelSlider 
+              <InfiniteSlider 
                 label="Scale" 
                 value={whimsyScale} 
                 onChange={setWhimsyScale} 
                 min={8} 
                 max={800} 
-                width="w-36" 
+                width="w-32" 
               />
               
               <div className="flex items-center gap-2">
@@ -412,7 +466,7 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
             <Divider />
 
             <div className="flex items-center gap-2">
-              <Label>Position (t)</Label>
+              <Label>Position</Label>
               <input 
                 type="range" 
                 min="0" 
@@ -425,23 +479,24 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
               <span className="text-[9px] font-mono font-bold text-slate-400 w-8">{connectionT.toFixed(3)}</span>
             </div>
 
-            <WheelSlider 
+            <InfiniteSlider 
               label="Width" 
               value={connectorWidthPx} 
               onChange={setConnectorWidthPx} 
               min={4} 
               max={200} 
               unit="px"
-              width="w-36" 
+              width="w-24" 
             />
 
-            <WheelSlider 
+            <InfiniteSlider 
               label="Extrude" 
               value={connectorExtrusion} 
               onChange={setConnectorExtrusion} 
               min={1} 
               max={200} 
-              width="w-36" 
+              width="w-24" 
+              unit="px"
             />
 
             <div className="flex items-center gap-2">
@@ -455,23 +510,26 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
                     : 'bg-white border-slate-200 text-slate-600 hover:border-emerald-300'
                 }`}
               >
-                {currentConnectorHead ? (
-                  <svg viewBox="0 0 100 100" className="w-3 h-3">
-                    <path d={currentConnectorHead.svgData} fill="currentColor" />
-                  </svg>
-                ) : <Book className="w-3 h-3" />}
-                {currentConnectorHead?.name || 'Library'}
+                <div className="w-4 h-4 flex items-center justify-center shrink-0">
+                  {currentConnectorHead ? (
+                    <svg viewBox="-1.2 -1.2 2.4 2.4" className="w-full h-full">
+                      <path d={currentConnectorHead.svgData} fill="currentColor" />
+                    </svg>
+                  ) : <Book className="w-3 h-3" />}
+                </div>
+                <span className="truncate max-w-[80px]">{currentConnectorHead?.name || 'Library'}</span>
               </button>
             </div>
 
-            <WheelSlider 
+            <InfiniteSlider 
               label="Scale" 
               value={connectorHeadScale} 
               onChange={setConnectorHeadScale} 
               min={0.1} 
               max={5} 
               step={0.1}
-              width="w-36" 
+              width="w-24" 
+              sensitivity={0.05}
             />
 
             <div className="flex items-center gap-2">
@@ -500,6 +558,58 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
                 className="w-16 h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-emerald-600"
               />
               <span className="text-[9px] font-mono font-bold text-slate-400 w-8">{connectorJitter.toFixed(1)}</span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Label>Neck</Label>
+              <select
+                value={connectorNeckShape}
+                onChange={e => setConnectorNeckShape(e.target.value as NeckShape)}
+                className="h-7 px-2 rounded-lg text-[10px] font-bold border border-slate-100 bg-slate-50 text-slate-700 outline-none focus:ring-1 focus:ring-emerald-500"
+              >
+                <option value={NeckShape.STANDARD}>Standard</option>
+                <option value={NeckShape.TAPERED}>Tapered</option>
+                <option value={NeckShape.CURVED}>Curved</option>
+              </select>
+            </div>
+
+            {connectorNeckShape === NeckShape.CURVED && (
+              <div className="flex items-center gap-2">
+                <Label>Neck Curve</Label>
+                <input 
+                  type="range" 
+                  min="-1" 
+                  max="1" 
+                  step="0.01" 
+                  value={connectorNeckCurvature} 
+                  onChange={e => setConnectorNeckCurvature(Number(e.target.value))}
+                  className="w-16 h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-emerald-600"
+                />
+                <span className="text-[9px] font-mono font-bold text-slate-400 w-8">{connectorNeckCurvature.toFixed(2)}</span>
+              </div>
+            )}
+
+            <div className="flex items-center gap-2">
+              <Label>Extrude Curve</Label>
+              <div className="flex items-center gap-1">
+                <input 
+                  type="range" 
+                  min="-1" 
+                  max="1" 
+                  step="0.01" 
+                  value={connectorExtrusionCurvature} 
+                  onChange={e => setConnectorExtrusionCurvature(Number(e.target.value))}
+                  className="w-16 h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-emerald-600"
+                />
+                <button
+                  onClick={() => setConnectorExtrusionCurvature(0)}
+                  className="p-0.5 hover:bg-slate-100 rounded text-slate-400 hover:text-emerald-600 transition-colors"
+                  title="Reset to 0"
+                >
+                  <RefreshCw className="w-2.5 h-2.5" />
+                </button>
+                <span className="text-[9px] font-mono font-bold text-slate-400 w-8 ml-0.5">{connectorExtrusionCurvature.toFixed(2)}</span>
+              </div>
             </div>
 
             <div className="flex items-center gap-2">
@@ -593,6 +703,26 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
           whimsies={whimsies}
           selectedHeadIds={massHeadIds}
           setSelectedHeadIds={setMassHeadIds}
+          widthRange={massWidthRange}
+          setWidthRange={setMassWidthRange}
+          widthRelative={massWidthRelative}
+          setWidthRelative={setMassWidthRelative}
+          extrusionRange={massExtrusionRange}
+          setExtrusionRange={setMassExtrusionRange}
+          extrusionRelative={massExtrusionRelative}
+          setExtrusionRelative={setMassExtrusionRelative}
+          positionRange={massPositionRange}
+          setPositionRange={setMassPositionRange}
+          headScaleRange={massHeadScaleRange}
+          setHeadScaleRange={setMassHeadScaleRange}
+          headScaleRelative={massHeadScaleRelative}
+          setHeadScaleRelative={setMassHeadScaleRelative}
+          useActualAreaForScale={massUseActualAreaForScale}
+          setUseActualAreaForScale={setMassUseActualAreaForScale}
+          headRotationRange={massHeadRotationRange}
+          setHeadRotationRange={setMassHeadRotationRange}
+          jitterRange={massJitterRange}
+          setJitterRange={setMassJitterRange}
           onAddMassConnectors={onAddMassConnectors}
           onPreviewMassConnectors={onPreviewMassConnectors}
           onCommitPreviewConnectors={onCommitPreviewConnectors}

@@ -34,6 +34,12 @@ export interface Area {
   cachedBounds?: { x: number; y: number; width: number; height: number };
 }
 
+export enum NeckShape {
+  STANDARD = 'STANDARD',
+  TAPERED = 'TAPERED',
+  CURVED = 'CURVED'
+}
+
 export interface Connector {
   id: string;
   pieceId: string;
@@ -48,6 +54,9 @@ export interface Connector {
   jitter?: number;
   jitterSeed?: number;
   disabled?: boolean;
+  neckShape?: NeckShape;
+  neckCurvature?: number; // For CURVED neck: -1 to 1
+  extrusionCurvature?: number; // For curved path to head: -1 to 1
 }
 
 export interface Whimsy {

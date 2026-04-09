@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { Maximize2, Minus, Plus } from 'lucide-react';
-import { PuzzleState, AreaType, Point, Area, Connector } from '../types';
+import { PuzzleState, AreaType, Point, Area, Connector, NeckShape } from '../types';
 import { getWhimsyTemplatePathData, WhimsyTemplateId } from '../utils/whimsyGallery';
 import { 
   getPointOnBoundary, 
@@ -40,6 +40,9 @@ interface V3CanvasProps {
   connectorHeadRotation: number;
   connectorJitter: number;
   connectorJitterSeed: number;
+  connectorNeckShape: NeckShape;
+  connectorNeckCurvature: number;
+  connectorExtrusionCurvature: number;
   useEquidistantHeadPoint: boolean;
   selectedConnectorId: string | null;
   onConnectorSelect: (id: string | null) => void;
@@ -77,6 +80,9 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
   connectorHeadRotation,
   connectorJitter,
   connectorJitterSeed,
+  connectorNeckShape,
+  connectorNeckCurvature,
+  connectorExtrusionCurvature,
   useEquidistantHeadPoint,
   selectedConnectorId,
   onConnectorSelect,
@@ -190,7 +196,10 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
         useEquidistantHeadPoint,
         whimsies,
         connectorJitter,
-        connectorJitterSeed
+        connectorJitterSeed,
+        connectorNeckShape,
+        connectorNeckCurvature,
+        connectorExtrusionCurvature
       );
 
       return { 
@@ -205,7 +214,7 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
       console.error('Failed to get connection data:', e);
       return null;
     }
-  }, [activeTab, selectedIds, areas, connectionT, connectionPathIndex, connectorWidthPx, connectorExtrusion, connectorHeadTemplate, connectorHeadScale, connectorHeadRotation, connectorJitter, connectorJitterSeed, whimsies]);
+  }, [activeTab, selectedIds, areas, connectionT, connectionPathIndex, connectorWidthPx, connectorExtrusion, connectorHeadTemplate, connectorHeadScale, connectorHeadRotation, connectorJitter, connectorJitterSeed, connectorNeckShape, connectorNeckCurvature, connectorExtrusionCurvature, whimsies]);
 
   // Cache rendered connector geometry per connector ID, keyed by a hash of inputs.
   // This avoids recomputing all connectors when only one changes (e.g. during drag).
@@ -223,7 +232,7 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
       if (!piece) return null;
 
       // Build a stable key from all inputs that affect geometry
-      const key = `${c.pieceId}|${c.pathIndex}|${c.midT}|${c.widthPx}|${c.extrusion}|${c.headTemplateId}|${c.headScale}|${c.headRotationDeg}|${c.useEquidistantHeadPoint}|${c.jitter || 0}|${c.jitterSeed || 0}`;
+      const key = `${c.pieceId}|${c.pathIndex}|${c.midT}|${c.widthPx}|${c.extrusion}|${c.headTemplateId}|${c.headScale}|${c.headRotationDeg}|${c.useEquidistantHeadPoint}|${c.jitter || 0}|${c.jitterSeed || 0}|${c.neckShape || ''}|${c.neckCurvature || 0}|${c.extrusionCurvature || 0}`;
       const cached = cache[c.id];
       if (cached && cached.key === key) {
         return cached.result;
@@ -242,7 +251,10 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
           c.useEquidistantHeadPoint,
           whimsies,
           c.jitter || 0,
-          c.jitterSeed || 0
+          c.jitterSeed || 0,
+          c.neckShape,
+          c.neckCurvature,
+          c.extrusionCurvature
         );
         const pt = getPointOnBoundary(piece.boundary, c.midT, c.pathIndex);
         const normal = getNormalOnBoundary(piece.boundary, c.midT, c.pathIndex);
@@ -282,7 +294,10 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
           c.useEquidistantHeadPoint,
           whimsies,
           c.jitter || 0,
-          c.jitterSeed || 0
+          c.jitterSeed || 0,
+          c.neckShape,
+          c.neckCurvature,
+          c.extrusionCurvature
         );
         return { id: c.id, pieceId: c.pieceId, pathData: result.pathData, color: piece.color };
       } catch (e) {
@@ -296,6 +311,9 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
     if ('touches' in e) {
       clientX = e.touches[0].clientX;
       clientY = e.touches[0].clientY;
+      if (isDraggingNewHandler || draggingConnectorId) {
+        e.preventDefault();
+      }
     } else {
       clientX = e.clientX;
       clientY = e.clientY;

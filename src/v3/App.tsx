@@ -7,7 +7,7 @@ import { V3Canvas } from './components/V3Canvas';
 import { V3ProductionTab } from './components/V3ProductionTab';
 import { V3CreateModal } from './components/V3CreateModal';
 import { Tab } from '../v2/constants';
-import { Point, AreaType, Connector } from './types';
+import { Point, AreaType, Connector, NeckShape } from './types';
 import { getPathCount, getClosestLocationOnBoundary } from './utils/paperUtils';
 import paper from 'paper';
 
@@ -50,10 +50,25 @@ export default function V3App() {
   const [connectorHeadScale, setConnectorHeadScale] = useState(1.0);
   const [connectorHeadRotation, setConnectorHeadRotation] = useState(0);
   const [connectorJitter, setConnectorJitter] = useState(0);
+  const [connectorNeckShape, setConnectorNeckShape] = useState<NeckShape>(NeckShape.STANDARD);
+  const [connectorNeckCurvature, setConnectorNeckCurvature] = useState(0);
+  const [connectorExtrusionCurvature, setConnectorExtrusionCurvature] = useState(0);
   const [useEquidistantHeadPoint, setUseEquidistantHeadPoint] = useState(true);
   const [selectedConnectorId, setSelectedConnectorId] = useState<string | null>(null);
   const lastConnectorClickTime = useRef(0);
   const [massHeadIds, setMassHeadIds] = useState<string[]>(['circle']);
+
+  // Mass Connection Parameters (Persistent)
+  const [massWidthRange, setMassWidthRange] = useState<[number, number]>([12, 20]);
+  const [massWidthRelative, setMassWidthRelative] = useState(false);
+  const [massExtrusionRange, setMassExtrusionRange] = useState<[number, number]>([15, 25]);
+  const [massExtrusionRelative, setMassExtrusionRelative] = useState(true);
+  const [massPositionRange, setMassPositionRange] = useState<[number, number]>([45, 55]);
+  const [massHeadScaleRange, setMassHeadScaleRange] = useState<[number, number]>([5, 15]);
+  const [massHeadScaleRelative, setMassHeadScaleRelative] = useState(true);
+  const [massUseActualAreaForScale, setMassUseActualAreaForScale] = useState(false);
+  const [massHeadRotationRange, setMassHeadRotationRange] = useState<[number, number]>([0, 0]);
+  const [massJitterRange, setMassJitterRange] = useState<[number, number]>([0, 2]);
 
   // Preview state
   const [previewConnectors, setPreviewConnectors] = useState<Record<string, Connector>>({});
@@ -96,6 +111,9 @@ export default function V3App() {
       setConnectorHeadScale(c.headScale);
       setConnectorHeadRotation(c.headRotationDeg);
       setConnectorJitter(c.jitter || 0);
+      setConnectorNeckShape(c.neckShape || NeckShape.STANDARD);
+      setConnectorNeckCurvature(c.neckCurvature || 0);
+      setConnectorExtrusionCurvature(c.extrusionCurvature || 0);
       setUseEquidistantHeadPoint(c.useEquidistantHeadPoint !== undefined ? c.useEquidistantHeadPoint : true);
     }
   }, [selectedConnectorId]); // Only sync when selection changes
@@ -112,10 +130,13 @@ export default function V3App() {
         headScale: connectorHeadScale,
         headRotationDeg: connectorHeadRotation,
         jitter: connectorJitter,
+        neckShape: connectorNeckShape,
+        neckCurvature: connectorNeckCurvature,
+        extrusionCurvature: connectorExtrusionCurvature,
         useEquidistantHeadPoint: useEquidistantHeadPoint
       });
     }
-  }, [selectedConnectorId, connectionT, connectionPathIndex, connectorWidthPx, connectorExtrusion, connectorHeadTemplate, connectorHeadScale, connectorHeadRotation, connectorJitter, useEquidistantHeadPoint, updateConnector]);
+  }, [selectedConnectorId, connectionT, connectionPathIndex, connectorWidthPx, connectorExtrusion, connectorHeadTemplate, connectorHeadScale, connectorHeadRotation, connectorJitter, connectorNeckShape, connectorNeckCurvature, connectorExtrusionCurvature, useEquidistantHeadPoint, updateConnector]);
 
   const maxPathIndex = useMemo(() => {
     if (selectedIds.length !== 1) return 0;
@@ -300,6 +321,9 @@ export default function V3App() {
       headRotationDeg: connectorHeadRotation,
       jitter: connectorJitter,
       jitterSeed: previewJitterSeedRef.current,
+      neckShape: connectorNeckShape,
+      neckCurvature: connectorNeckCurvature,
+      extrusionCurvature: connectorExtrusionCurvature,
       useEquidistantHeadPoint: useEquidistantHeadPoint
     });
     // Regenerate seed so next preview has a different jitter
@@ -328,7 +352,7 @@ export default function V3App() {
   const fitScale = Math.max(0.1, Math.min(containerSize.w / (width || 800), containerSize.h / (height || 600)) * 0.9);
 
   return (
-    <div className="flex flex-col h-screen bg-slate-50 overflow-hidden font-sans selection:bg-indigo-100">
+    <div className="flex flex-col min-h-screen bg-slate-50 overflow-y-auto font-sans selection:bg-indigo-100">
       {showCreateModal && (
         <V3CreateModal onCreate={handleCreate} />
       )}
@@ -389,6 +413,12 @@ export default function V3App() {
         onRemoveConnector={removeConnector}
         connectorJitter={connectorJitter}
         setConnectorJitter={setConnectorJitter}
+        connectorNeckShape={connectorNeckShape}
+        setConnectorNeckShape={setConnectorNeckShape}
+        connectorNeckCurvature={connectorNeckCurvature}
+        setConnectorNeckCurvature={setConnectorNeckCurvature}
+        connectorExtrusionCurvature={connectorExtrusionCurvature}
+        setConnectorExtrusionCurvature={setConnectorExtrusionCurvature}
         onAddMassConnectors={addMassConnectors}
         onPreviewMassConnectors={handlePreviewMassConnectors}
         onCommitPreviewConnectors={handleCommitPreviewConnectors}
@@ -406,6 +436,26 @@ export default function V3App() {
         }}
         massHeadIds={massHeadIds}
         setMassHeadIds={setMassHeadIds}
+        massWidthRange={massWidthRange}
+        setMassWidthRange={setMassWidthRange}
+        massWidthRelative={massWidthRelative}
+        setMassWidthRelative={setMassWidthRelative}
+        massExtrusionRange={massExtrusionRange}
+        setMassExtrusionRange={setMassExtrusionRange}
+        massExtrusionRelative={massExtrusionRelative}
+        setMassExtrusionRelative={setMassExtrusionRelative}
+        massPositionRange={massPositionRange}
+        setMassPositionRange={setMassPositionRange}
+        massHeadScaleRange={massHeadScaleRange}
+        setMassHeadScaleRange={setMassHeadScaleRange}
+        massHeadScaleRelative={massHeadScaleRelative}
+        setMassHeadScaleRelative={setMassHeadScaleRelative}
+        massUseActualAreaForScale={massUseActualAreaForScale}
+        setMassUseActualAreaForScale={setMassUseActualAreaForScale}
+        massHeadRotationRange={massHeadRotationRange}
+        setMassHeadRotationRange={setMassHeadRotationRange}
+        massJitterRange={massJitterRange}
+        setMassJitterRange={setMassJitterRange}
         areas={areas}
         onCreateStamp={stampOps.createStamp}
         onPlaceStamp={(sourceGroupId) => {
@@ -416,7 +466,7 @@ export default function V3App() {
         onRefreshStamps={stampOps.refreshAllStamps}
       />
 
-      <main className="flex-1 relative overflow-hidden flex flex-col" ref={containerRef}>
+      <main className="flex-1 relative min-h-[50vh] flex flex-col" ref={containerRef}>
         {activeTab === 'PRODUCTION' ? (
           <V3ProductionTab puzzleState={puzzleState} onResolveConflicts={resolveConnectorConflicts} />
         ) : (
@@ -447,6 +497,9 @@ export default function V3App() {
             connectorHeadRotation={connectorHeadRotation}
             connectorJitter={connectorJitter}
             connectorJitterSeed={previewJitterSeed}
+            connectorNeckShape={connectorNeckShape}
+            connectorNeckCurvature={connectorNeckCurvature}
+            connectorExtrusionCurvature={connectorExtrusionCurvature}
             useEquidistantHeadPoint={useEquidistantHeadPoint}
             selectedConnectorId={selectedConnectorId}
             previewConnectors={previewConnectors}

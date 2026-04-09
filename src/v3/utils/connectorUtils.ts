@@ -1,5 +1,6 @@
 import paper from 'paper';
-import { Area, AreaType, Connector, Whimsy } from '../types';
+import { Area, AreaType, Connector, Whimsy, NeckShape } from '../types';
+import { generateNeck } from './neckUtils';
 
 /** Simple seeded pseudo-random number generator (mulberry32). Returns values in [0, 1). */
 function makeRng(seed: number): () => number {
@@ -10,6 +11,45 @@ function makeRng(seed: number): () => number {
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) >>> 0;
     return ((t ^ (t >>> 14)) >>> 0) / 0x100000000;
   };
+}
+
+/**
+ * Finds the point on a path that is closest to a line defined by a start point and a direction normal.
+ * 
+ * Algorithm:
+ * Reuses the "closest to point" logic (getNearestPoint) by projecting a search point 
+ * far along the normal. This finds the point on the path that is most "in front" 
+ * of the starting point in the given direction.
+ */
+function getClosestPointOnPathToLine(
+  path: paper.PathItem, 
+  lineStart: paper.Point, 
+  lineNormal: paper.Point
+): paper.Point {
+  // 1. Try ray intersection first (most accurate for "parallel" neck sides)
+  // This ensures the neck follows the exact direction of the normal from the base points.
+  const farPoint = lineStart.add(lineNormal.multiply(2000));
+  const ray = new paper.Path.Line(lineStart, farPoint);
+  const intersections = path.getIntersections(ray);
+
+  if (intersections.length > 0) {
+    // Sort by distance from lineStart and pick the closest one
+    intersections.sort((a, b) => 
+      lineStart.getDistance(a.point) - lineStart.getDistance(b.point)
+    );
+    const result = intersections[0].point;
+    ray.remove();
+    return result;
+  }
+
+  // 2. Fallback: If ray misses, find the point on the path that is closest to the infinite line.
+  // We use the ray itself to find the nearest point on the path to that line.
+  // Since paper.js getNearestPoint only takes a point, we find the point on the line
+  // that is closest to the path's center, and then find the nearest point on the path to that.
+  const nearestOnRay = ray.getNearestPoint(path.bounds.center);
+  const result = path.getNearestPoint(nearestOnRay);
+  ray.remove();
+  return result;
 }
 
 /**
@@ -52,7 +92,10 @@ export function generateConnectorPath(
   useEquidistantHeadPoint: boolean = true,
   whimsies: Whimsy[] = [],
   jitter: number = 0,
-  jitterSeed: number = 0
+  jitterSeed: number = 0,
+  neckShape: NeckShape = NeckShape.STANDARD,
+  neckCurvature: number = 0,
+  extrusionCurvature: number = 0
 ): { pathData: string, basePathData: string, headCenter: paper.Point } {
   const children = boundary instanceof paper.CompoundPath 
     ? (boundary.children.filter(c => c instanceof paper.Path) as paper.Path[])
@@ -77,8 +120,10 @@ export function generateConnectorPath(
 
   const p1 = getWrappedPoint(t1);
   const p2 = getWrappedPoint(t2);
+  const n1 = getWrappedNormal(t1);
+  const n2 = getWrappedNormal(t2);
   
-  if (!p1 || !p2) {
+  if (!p1 || !p2 || !n1 || !n2) {
     // Fallback if points can't be found
     return { pathData: '', basePathData: '', headCenter: new paper.Point(0, 0) };
   }
@@ -98,8 +143,12 @@ export function generateConnectorPath(
   if (chordNormal.dot(midNormal) < 0) {
     chordNormal = chordNormal.multiply(-1);
   }
-  
-  const headCenter = midPoint.add(chordNormal.multiply(extrusion));
+
+  // Support curved extrusion
+  const extrusionTangent = new paper.Point(-chordNormal.y, chordNormal.x);
+  const headCenter = midPoint
+    .add(chordNormal.multiply(extrusion))
+    .add(extrusionTangent.multiply(extrusion * extrusionCurvature));
   
   let head: paper.PathItem;
   const whimsy = whimsies.find(w => w.id === headTemplateId);
@@ -149,81 +198,14 @@ export function generateConnectorPath(
     }
   }
 
-  // Rotate head to align with chordNormal (neck direction)
-  // Standard "up" for these shapes is (0, -1), which is -90 degrees.
-  const baseRotation = chordNormal.angle + 90;
+  // Rotate head to align with the local normal at the head center
+  // If extrusion is curved, the "up" direction at the head is different.
+  // We use the vector from midPoint to headCenter as the effective normal.
+  const headNormal = headCenter.subtract(midPoint).normalize();
+  const baseRotation = headNormal.angle + 90;
   head.rotate(baseRotation + headRotationDeg, headCenter);
   
-  // 3. Find contact points on head
-  const headPath = (head instanceof paper.CompoundPath ? head.children[0] : head) as paper.Path;
-  
-  let hMidOffset: number;
-  if (useEquidistantHeadPoint) {
-    // Find intersection of normal ray from chordMidPoint with head boundary
-    const rayLine = new paper.Path.Line(chordMidPoint, chordMidPoint.add(chordNormal.multiply(2000)));
-    const intersections = headPath.getIntersections(rayLine);
-    rayLine.remove();
-    
-    if (intersections.length > 0) {
-      // Sort by distance from chordMidPoint
-      intersections.sort((a, b) => a.point.getDistance(chordMidPoint) - b.point.getDistance(chordMidPoint));
-      hMidOffset = headPath.getOffsetOf(intersections[0].point);
-    } else {
-      hMidOffset = headPath.getNearestLocation(midPoint).offset;
-    }
-  } else {
-    hMidOffset = headPath.getNearestLocation(midPoint).offset;
-  }
-  
-  // We want the neck width on the head to be similar to widthPx
-  const hOffset1 = (hMidOffset - widthPx / 2 + headPath.length) % headPath.length;
-  const hOffset2 = (hMidOffset + widthPx / 2) % headPath.length;
-  
-  const pt1Head = headPath.getPointAt(hOffset1);
-  const pt2Head = headPath.getPointAt(hOffset2);
-  
-  // Identify which head point is "left" (towards p2) and which is "right" (towards p1)
-  // chord points from p1 (right) to p2 (left).
-  const isPt1Left = pt1Head.subtract(headCenter).dot(chord) > pt2Head.subtract(headCenter).dot(chord);
-  
-  const leftHeadPt = isPt1Left ? pt1Head : pt2Head;
-  const rightHeadPt = isPt1Left ? pt2Head : pt1Head;
-  const leftHeadOffset = isPt1Left ? hOffset1 : hOffset2;
-  const rightHeadOffset = isPt1Left ? hOffset2 : hOffset1;
-
-  // 4. Construct neck as a wedge that overlaps the head
-  const neck = new paper.Path({ insert: false });
-  
-  // Bottom edge (along piece boundary from p1 to p2)
-  const steps = 12;
-  const baseOnly = new paper.Path({ insert: false });
-  for (let i = 0; i <= steps; i++) {
-    const t = t1 + (t2 - t1) * (i / steps);
-    const pt = getWrappedPoint(t);
-    const normal = getWrappedNormal(t);
-    
-    if (!pt || !normal) continue;
-    
-    // Extend slightly into the piece for robust union (skirt)
-    const extendedPt = pt.subtract(normal.multiply(0.5));
-    neck.add(extendedPt);
-    
-    baseOnly.add(pt);
-  }
-  const basePathData = baseOnly.pathData;
-  baseOnly.remove();
-  
-  // Side edge 1: p2 (left) to leftHeadPt
-  neck.add(leftHeadPt);
-  
-  // Deep point to ensure overlap (the head center)
-  neck.add(headCenter);
-  
-  // Side edge 2: rightHeadPt to p1 (handled by closing the path)
-  neck.add(rightHeadPt);
-  neck.closed = true;
-
-  // 5. Apply jitter to head only, before union with neck
+  // 3. Apply jitter to head before calculating contact points
   if (jitter > 0) {
     const rng = makeRng(jitterSeed);
     const applyJitter = (path: paper.Path) => {
@@ -243,13 +225,46 @@ export function generateConnectorPath(
     }
   }
 
-  // 6. Combine using boolean union
-  const combined = neck.unite(head);
+  // 4. Find contact points on head
+  let pt1Head: paper.Point;
+  let pt2Head: paper.Point;
+
+  // Use a ray direction that points towards the head center to handle curved extrusion
+  const rayDir = headCenter.subtract(chordMidPoint).normalize();
+
+  if (useEquidistantHeadPoint) {
+    // New algorithm: Use ray intersection to find where the parallel sides of the neck
+    // hit the head. This ensures the neck follows the normal direction exactly.
+    pt1Head = getClosestPointOnPathToLine(head, p1, rayDir);
+    pt2Head = getClosestPointOnPathToLine(head, p2, rayDir);
+  } else {
+    // Legacy/Fallback: We want the neck width on the head to be similar to widthPx
+    const headPath = (head instanceof paper.CompoundPath ? head.children[0] : head) as paper.Path;
+    let hMidOffset: number;
+    hMidOffset = headPath.getNearestLocation(midPoint).offset;
+    
+    const hOffset1 = (hMidOffset - widthPx / 2 + headPath.length) % headPath.length;
+    const hOffset2 = (hMidOffset + widthPx / 2) % headPath.length;
+    
+    pt1Head = headPath.getPointAt(hOffset1);
+    pt2Head = headPath.getPointAt(hOffset2);
+  }
+  
+  // 5. Construct neck
+  const { neck: robustNeck, basePathData } = generateNeck(
+    p1, p2, pt1Head, pt2Head,
+    neckShape, neckCurvature, widthPx,
+    t1, t2, sourcePath,
+    head, chordMidPoint, rayDir
+  );
+
+  // 7. Combine using boolean union
+  const combined = robustNeck.unite(head);
 
   const pathData = combined.pathData;
   
   // Cleanup
-  neck.remove();
+  robustNeck.remove();
   head.remove();
   combined.remove();
   
