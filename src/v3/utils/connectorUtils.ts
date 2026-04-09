@@ -231,12 +231,10 @@ export function generateConnectorPath(
   let pt1Head: paper.Point;
   let pt2Head: paper.Point;
 
-  // Use the midNormal as the primary ray direction for symmetry, 
-  // but ensure it points towards the head.
-  let rayDir = midNormal.normalize();
-  if (rayDir.dot(headCenter.subtract(midPoint)) < 0) {
-    rayDir = rayDir.multiply(-1);
-  }
+  // Use the chord normal (perpendicular to the p1-p2 chord) as the ray direction.
+  // This keeps the neck sides parallel regardless of boundary curvature or corners.
+  // chordNormal already points outward (same side as midNormal) from the computation above.
+  let rayDir = chordNormal;
 
   // Handle partial overlap by extending p1/p2 if one is inside the head
   const p1Inside = head.contains(p1);
