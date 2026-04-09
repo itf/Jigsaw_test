@@ -25,8 +25,10 @@ export function mergeSmallAreas(areas: ProductionArea[], threshold: number): Pro
           // Unite the paths
           const p1 = new paper.CompoundPath({ pathData: area.pathData, insert: false });
           const p2 = new paper.CompoundPath({ pathData: neighbor.pathData, insert: false });
-          // unite then subtracting intersect is redundant, but makes paper js work much better
-          const united = p1.unite(p2).subtract((p1.intersect(p2,{insert:false})), {insert:false});
+          
+          // Unite and subtract intersection as this helps paper js remove lines
+          const united = p1.unite(p2).subtract(p1.intersect(p2,{insert:false}),{insert:false});
+          
           
           // Update neighbor
           nextAreas[neighborIndex] = {
@@ -54,57 +56,55 @@ export function mergeSmallAreas(areas: ProductionArea[], threshold: number): Pro
 }
 
 /**
- * Finds the index of the neighbor that shares the most boundary with the given area.
+ * Finds the index of the neighbor that shares the longest boundary (most sampling hits).
  */
 function findBestNeighbor(area: ProductionArea, allAreas: ProductionArea[], currentIndex: number): number {
   const path = new paper.CompoundPath({ pathData: area.pathData, insert: false });
+  const steps = 40; // More steps for better boundary length estimation
+  
+  // Create neighbor paths once for efficient testing
+  const neighborPaths = allAreas.map((a, idx) => 
+    idx === currentIndex ? null : new paper.CompoundPath({ pathData: a.pathData, insert: false })
+  );
 
-  // Expand the path slightly to find neighbors
-  // We'll use a simple trick: check points along the boundary and see which neighbor contains them
-  const steps = 20;
-  const neighborHits: Record<number, number> = {};
-
-  // We need to find the outer path for sampling points
+  const neighborHits = new Map<number, number>();
   const sourcePath = (path instanceof paper.CompoundPath
     ? (path.children.find(c => (c as paper.Path).clockwise) || path.children[0])
     : path) as paper.Path;
 
-  for (let i = 0; i < steps; i++) {
-    const pt = sourcePath.getPointAt(sourcePath.length * (i / steps));
-    const normal = sourcePath.getNormalAt(sourcePath.length * (i / steps));
-
-    // Look slightly outside
-    if (!pt || !normal) continue;
-    
-    const testPt = pt.add(normal.multiply(1.5));
-    
-    for (let j = 0; j < allAreas.length; j++) {
-      if (j === currentIndex) continue;
+  if (sourcePath && sourcePath.length > 0) {
+    for (let i = 0; i < steps; i++) {
+      const pt = sourcePath.getPointAt(sourcePath.length * (i / steps));
+      const normal = sourcePath.getNormalAt(sourcePath.length * (i / steps));
+      if (!pt || !normal) continue;
       
-      const neighborPath = new paper.CompoundPath({ pathData: allAreas[j].pathData, insert: false });
+      // Look slightly outside the piece to find the neighbor
+      const testPt = pt.add(normal.multiply(1.5));
       
-      if (neighborPath.contains(testPt)) {
-        neighborHits[j] = (neighborHits[j] || 0) + 1;
-        neighborPath.remove();
-        break;
+      for (let j = 0; j < neighborPaths.length; j++) {
+        const np = neighborPaths[j];
+        if (np && np.contains(testPt)) {
+          neighborHits.set(j, (neighborHits.get(j) || 0) + 1);
+          break;
+        }
       }
-      neighborPath.remove();
     }
   }
   
+  // Cleanup
   path.remove();
+  neighborPaths.forEach(p => p?.remove());
   
-  // Find the neighbor with the most hits
+  // Find the neighbor with the most hits (longest shared boundary)
   let bestIndex = -1;
   let maxHits = 0;
   
-  for (const indexStr in neighborHits) {
-    const index = parseInt(indexStr);
-    if (neighborHits[index] > maxHits) {
-      maxHits = neighborHits[index];
+  neighborHits.forEach((hits, index) => {
+    if (hits > maxHits) {
+      maxHits = hits;
       bestIndex = index;
     }
-  }
+  });
   
   return bestIndex;
 }

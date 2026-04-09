@@ -85,46 +85,32 @@ export function generateNeck(
 
     const useCW = midCW.getDistance(chordMidPoint) < midCCW.getDistance(chordMidPoint);
     
-    // Extract exact segment
+    // Extract exact segment (the outer part of the head)
     const headSegment = useCW 
-      ? getExactSegment(headPath, offset2, offset1, false)
-      : getExactSegment(headPath, offset1, offset2, true);
-    
-    // Push into head for robustness (Commented out for testing)
-    // headSegment.translate(rayDir.multiply(1));
+      ? getExactSegment(headPath, offset1, offset2, true)
+      : getExactSegment(headPath, offset2, offset1, false);
     
     neck.join(headSegment);
   } else {
-    // neck.add(pt1Head.add(rayDir));
     neck.add(pt1Head);
   }
 
   // D. Side 2: pt1Head to p1
-  // addNeckSide(neck, pt1Head.add(rayDir), p1.subtract(rayDir), p2, neckShape, neckCurvature, widthPx, curveDir);
   addNeckSide(neck, pt1Head, p1, p2, neckShape, neckCurvature, widthPx, curveDir);
 
   neck.closed = true;
 
-  // 6. Cleaning polygon (using the same logic)
-  const cleaningPoly = new paper.Path({ insert: false });
-  // cleaningPoly.add(p1.subtract(rayDir));
-  // cleaningPoly.lineTo(p2.subtract(rayDir));
-  // addNeckSide(cleaningPoly, p2.subtract(rayDir), pt2Head.add(rayDir), p1, neckShape, neckCurvature, widthPx, curveDir);
-  // cleaningPoly.lineTo(pt1Head.add(rayDir));
-  // addNeckSide(cleaningPoly, pt1Head.add(rayDir), p1.subtract(rayDir), p2, neckShape, neckCurvature, widthPx, curveDir);
-  
-  cleaningPoly.add(p1);
-  cleaningPoly.lineTo(p2);
-  addNeckSide(cleaningPoly, p2, pt2Head, p1, neckShape, neckCurvature, widthPx, curveDir);
-  cleaningPoly.lineTo(pt1Head);
-  addNeckSide(cleaningPoly, pt1Head, p1, p2, neckShape, neckCurvature, widthPx, curveDir);
-  cleaningPoly.closed = true;
-  
-  const robustNeck = neck.unite(cleaningPoly);
-  neck.remove();
-  cleaningPoly.remove();
+  // Handle holes if head was a CompoundPath
+  let finalConnector: paper.PathItem = neck;
+  if (head instanceof paper.CompoundPath && head.children.length > 1) {
+    const holes = head.children.slice(1).map(c => c.clone({ insert: false }));
+    finalConnector = new paper.CompoundPath({
+      children: [neck, ...holes],
+      insert: false
+    });
+  }
 
-  return { neck: robustNeck, basePathData };
+  return { neck: finalConnector, basePathData };
 }
 
 function addNeckSide(

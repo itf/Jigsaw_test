@@ -248,6 +248,16 @@ export function generateConnectorPath(
     
     pt1Head = headPath.getPointAt(hOffset1);
     pt2Head = headPath.getPointAt(hOffset2);
+
+    // Ensure pt1Head is the one closer to p1 and pt2Head is closer to p2
+    // to prevent the neck sides from crossing.
+    const distNormal = p1.getDistance(pt1Head) + p2.getDistance(pt2Head);
+    const distSwapped = p1.getDistance(pt2Head) + p2.getDistance(pt1Head);
+    if (distSwapped < distNormal) {
+      const temp = pt1Head;
+      pt1Head = pt2Head;
+      pt2Head = temp;
+    }
   }
   
   // 5. Construct neck
@@ -258,8 +268,8 @@ export function generateConnectorPath(
     head, chordMidPoint, rayDir
   );
 
-  // 7. Combine using boolean union
-  const combined = robustNeck.unite(head);
+  // 7. Use the full connector path generated in step 5
+  const combined = robustNeck;
 
   const pathData = combined.pathData;
   
