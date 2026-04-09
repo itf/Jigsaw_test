@@ -135,6 +135,13 @@ function applyConnectorsToBoundary(
     if (ownedByGroup) {
       const neighborInGroup = neighborId && pieceIdSet.has(neighborId);
       if (!neighborInGroup) {
+        // Outward connector: owned by group piece, neighbor outside → unite in
+        const united = boundary.unite(path, { insert: false });
+        boundary.remove();
+        boundary = cleanPath(united);
+      } else {
+        // Internal connector: both owner and neighbor are in the group.
+        // Always unite — the connector may overflow the group's piece union boundary.
         const united = boundary.unite(path, { insert: false });
         boundary.remove();
         boundary = cleanPath(united);
