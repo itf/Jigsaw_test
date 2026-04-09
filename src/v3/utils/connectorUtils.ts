@@ -306,7 +306,7 @@ export function generateConnectorPath(
   }
   
   // 5. Construct neck
-  const { neck: robustNeck, basePathData } = generateNeck(
+  const { neck: robustNeck, basePath } = generateNeck(
     p1, p2, pt1Head, pt2Head,
     neckShape, neckCurvature, widthPx,
     currentT1, currentT2, sourcePath,
@@ -317,11 +317,13 @@ export function generateConnectorPath(
   const combined = attachHead(robustNeck, head, pt1Head, pt2Head, chordMidPoint, rayDir, p1, p2);
 
   const pathData = combined.pathData;
-  
+  const basePathData = basePath.pathData;
+
   // Cleanup
   robustNeck.remove();
   head.remove();
   combined.remove();
-  
+  basePath.remove();
+
   return { pathData, basePathData, headCenter, p1, p2 };
 }

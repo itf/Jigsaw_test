@@ -3,6 +3,7 @@ import paper from 'paper';
 import { RefreshCw, Download, Layers, Trash2 } from 'lucide-react';
 import { PuzzleState } from '../types';
 import { processProductionState, ProductionArea } from '../utils/production/processProduction';
+
 import { mergeSmallAreas } from '../utils/production/mergeSmallAreas';
 import { deduplicateProductionPaths } from '../utils/production/deduplicatePaths';
 import { removeDanglingEdges } from '../utils/paperUtils';
@@ -17,6 +18,7 @@ export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, o
   const [productionAreas, setProductionAreas] = useState<ProductionArea[]>([]);
   const [mergeThreshold, setMergeThreshold] = useState(100);
   const [deduplicate, setDeduplicate] = useState(true);
+  const [flattenCurves, setFlattenCurves] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -25,7 +27,7 @@ export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, o
     // Use setTimeout to allow UI to update before heavy processing
     setTimeout(() => {
       try {
-        const processed = processProductionState(puzzleState);
+        const processed = processProductionState(puzzleState, { flattenCurves });
         setProductionAreas(processed);
       } catch (e) {
         console.error('Production processing failed:', e);
@@ -33,7 +35,7 @@ export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, o
         setIsProcessing(false);
       }
     }, 100);
-  }, [puzzleState]);
+  }, [puzzleState, flattenCurves]);
 
   const handleMerge = useCallback(() => {
     if (productionAreas.length === 0) return;
@@ -165,6 +167,20 @@ export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, o
           <div className="h-8 w-px bg-slate-200 mx-2" />
 
           <div className="flex items-center gap-4 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200">
+            <label className="flex items-center gap-2 cursor-pointer group">
+              <input
+                type="checkbox"
+                checked={flattenCurves}
+                onChange={e => setFlattenCurves(e.target.checked)}
+                className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
+              />
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider group-hover:text-slate-700 transition-colors">
+                Flatten Curves
+              </span>
+            </label>
+
+            <div className="w-px h-4 bg-slate-300" />
+
             <label className="flex items-center gap-2 cursor-pointer group">
               <input
                 type="checkbox"
