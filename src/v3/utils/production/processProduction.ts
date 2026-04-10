@@ -14,10 +14,12 @@ export interface ProductionArea {
 
 /**
  * Processes the puzzle state for production:
- * 1. Pre-calculates all connector paths using original boundaries.
- * 2. Unites ALL connectors with their parent pieces (Pass 1).
- * 3. Subtracts pieces from each other to create the interlocking effect (Pass 2).
- * 4. Handles any resulting piece splits.
+ * 1. Flatten curves (optional) for reliable boolean ops.
+ * 2. Subtract STAMP boundaries from overlapping pieces.
+ * 3. Sequential piece-by-piece processing:
+ *    A. Merge all connectors into the piece's current state.
+ *    B. Subtract the expanded piece from all other pieces.
+ * 4. Handle any resulting piece splits.
  */
 export interface ProcessProductionOptions {
   flattenCurves?: boolean;
@@ -64,44 +66,31 @@ export function processProductionState(puzzleState: PuzzleState, options: Proces
   const pieceIds = Object.keys(piecePaths);
   const allConnectors = Object.values(connectors).filter(c => !c.disabled);
 
-  // Pass 1: Expand each piece that has connectors, and compute the notch shape
-  // (expandedA ∩ originalB) for every neighbor B. All intersections are computed
-  // against unmodified originals so the result is order-independent.
-  const notches: Record<string, paper.PathItem[]> = {};
-
+  // Sequential piece-by-piece processing:
+  // For each piece:
+  //   A. Merge all its connectors into its CURRENT state (which may have notches from prior pieces).
+  //   B. Subtract this expanded piece from ALL other pieces.
+  // This ensures every piece interlocks perfectly and no notches are lost.
   pieceIds.forEach(pieceId => {
     const originalPath = originalPiecePaths[pieceId];
     const pieceConnectors = allConnectors.filter(c => c.pieceId === pieceId);
-    if (pieceConnectors.length === 0) return; // nothing to expand
 
+    // A. Expand piece with its connectors
     const currentPath = piecePaths[pieceId];
     const expandedPiece = mergeAllConnectorsForPiece(currentPath, originalPath, pieceConnectors, puzzleState.whimsies, flattenCurves ? flattenTolerance : undefined);
     currentPath.remove();
     piecePaths[pieceId] = expandedPiece;
 
+    // B. Subtract this expanded piece from all other pieces
     const expandedBounds = expandedPiece.bounds;
     pieceIds.forEach(otherId => {
       if (otherId === pieceId) return;
-      const originalOther = originalPiecePaths[otherId];
-      if (!originalOther.bounds.intersects(expandedBounds)) return;
-      const notch = expandedPiece.intersect(originalOther, { insert: false });
-      if (!notch.isEmpty()) {
-        if (!notches[otherId]) notches[otherId] = [];
-        notches[otherId].push(notch);
-      }
+      const otherPiece = piecePaths[otherId];
+      if (!otherPiece.bounds.intersects(expandedBounds)) return;
+      const subtracted = otherPiece.subtract(expandedPiece, { insert: false });
+      otherPiece.remove();
+      piecePaths[otherId] = cleanPath(subtracted);
     });
-  });
-
-  // Pass 2: Subtract all accumulated notches from each affected piece.
-  Object.entries(notches).forEach(([pieceId, pieceNotches]) => {
-    let current = piecePaths[pieceId];
-    for (const notch of pieceNotches) {
-      const next = current.subtract(notch, { insert: false });
-      current.remove();
-      notch.remove();
-      current = cleanPath(next);
-    }
-    piecePaths[pieceId] = current;
   });
 
   // Cleanup

@@ -6,6 +6,7 @@ import { processProductionState, ProductionArea } from '../utils/production/proc
 
 import { mergeSmallAreas } from '../utils/production/mergeSmallAreas';
 import { deduplicateProductionPaths } from '../utils/production/deduplicatePaths';
+import { buildGraphPaths, GraphPath } from '../utils/production/graphTraversal';
 import { removeDanglingEdges } from '../utils/paperUtils';
 import { AlertCircle, Info, Scissors, Zap } from 'lucide-react';
 
@@ -20,6 +21,10 @@ export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, o
   const [deduplicate, setDeduplicate] = useState(true);
   const [flattenCurves, setFlattenCurves] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [graphPaths, setGraphPaths] = useState<GraphPath[]>([]);
+  const [selectedPathId, setSelectedPathId] = useState<number | null>(null);
+  const [singleLineMode, setSingleLineMode] = useState<'graph' | 'boolean'>('graph');
+  const [booleanPaths, setBooleanPaths] = useState<string[]>([]);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const handleReload = useCallback(() => {
@@ -36,6 +41,33 @@ export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, o
       }
     }, 100);
   }, [puzzleState, flattenCurves]);
+
+  // Recompute single-line paths whenever areas, deduplicate, or mode changes
+  useEffect(() => {
+    if (!deduplicate || productionAreas.length === 0) {
+      setGraphPaths([]);
+      setBooleanPaths([]);
+      setSelectedPathId(null);
+      return;
+    }
+    setIsProcessing(true);
+    setTimeout(() => {
+      try {
+        if (singleLineMode === 'graph') {
+          setGraphPaths(buildGraphPaths(productionAreas));
+          setBooleanPaths([]);
+        } else {
+          setBooleanPaths(deduplicateProductionPaths(productionAreas));
+          setGraphPaths([]);
+        }
+        setSelectedPathId(null);
+      } catch (e) {
+        console.error('Single-line processing failed:', e);
+      } finally {
+        setIsProcessing(false);
+      }
+    }, 100);
+  }, [productionAreas, deduplicate, singleLineMode]);
 
   const handleMerge = useCallback(() => {
     if (productionAreas.length === 0) return;
@@ -118,10 +150,16 @@ export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, o
   const handleDownloadSVG = useCallback(() => {
     if (productionAreas.length === 0) return;
 
-    let pathsToExport = productionAreas.map(a => a.pathData);
-    
-    if (deduplicate) {
-      pathsToExport = deduplicateProductionPaths(productionAreas);
+    let pathsToExport: string[];
+
+    if (deduplicate && singleLineMode === 'graph' && graphPaths.length > 0) {
+      pathsToExport = graphPaths.map(gp => gp.svgPathData);
+    } else if (deduplicate && singleLineMode === 'boolean' && booleanPaths.length > 0) {
+      pathsToExport = booleanPaths;
+    } else if (deduplicate) {
+      pathsToExport = deduplicateProductionPaths(productionAreas); // fallback
+    } else {
+      pathsToExport = productionAreas.map(a => a.pathData);
     }
 
     const svgContent = `
@@ -192,6 +230,17 @@ export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, o
                 Single-line export
               </span>
             </label>
+
+            {deduplicate && (
+              <select
+                value={singleLineMode}
+                onChange={e => setSingleLineMode(e.target.value as 'graph' | 'boolean')}
+                className="text-xs font-bold text-slate-600 bg-white border border-slate-200 rounded px-2 py-1 focus:ring-2 focus:ring-indigo-500 outline-none"
+              >
+                <option value="graph">Graph traversal</option>
+                <option value="boolean">Boolean dedup</option>
+              </select>
+            )}
 
             <div className="w-px h-4 bg-slate-300" />
 
@@ -289,8 +338,10 @@ export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, o
                 <div className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">Export Info</div>
               </div>
               <p className="text-[10px] text-indigo-700 leading-relaxed">
-                {deduplicate 
-                  ? "Single-line export is enabled. Shared boundaries will only be cut once." 
+                {deduplicate && graphPaths.length > 0
+                  ? `Graph traversal found ${graphPaths.length} continuous paths. Click a path to highlight it.`
+                  : deduplicate
+                  ? "Single-line export enabled. Computing paths..."
                   : "Standard export enabled. Each piece is a closed loop (double lines on shared edges)."}
               </p>
             </div>
@@ -307,18 +358,54 @@ export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, o
             className="w-full h-full"
           >
             <rect width={puzzleState.width} height={puzzleState.height} fill="#fff" />
-            <g fill="none" stroke="#334155" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              {productionAreas.map((area, i) => (
-                <path 
-                  key={area.id} 
-                  d={area.pathData} 
-                  className="hover:stroke-indigo-500 hover:stroke-[3] transition-all cursor-help"
-                  onMouseEnter={(e) => {
-                    // Optional: show area info on hover
-                  }}
-                />
-              ))}
-            </g>
+            {deduplicate && singleLineMode === 'graph' && graphPaths.length > 0 ? (
+              <g fill="none" strokeLinecap="round" strokeLinejoin="round">
+                {/* Invisible hit targets for easier clicking */}
+                {graphPaths.map(gp => (
+                  <path
+                    key={`hit-${gp.id}`}
+                    d={gp.svgPathData}
+                    stroke="transparent"
+                    strokeWidth={12}
+                    style={{ cursor: 'pointer', pointerEvents: 'stroke' }}
+                    onClick={() => setSelectedPathId(prev => prev === gp.id ? null : gp.id)}
+                  />
+                ))}
+                {/* Visible paths */}
+                {graphPaths.map(gp => {
+                  const isSelected = selectedPathId === gp.id;
+                  return (
+                    <path
+                      key={gp.id}
+                      d={gp.svgPathData}
+                      stroke={isSelected ? '#1e293b' : gp.color}
+                      strokeWidth={isSelected ? 4 : 1.5}
+                      style={{
+                        cursor: 'pointer',
+                        pointerEvents: 'none',
+                        filter: isSelected ? 'drop-shadow(0 0 8px rgba(30, 41, 59, 0.8)) drop-shadow(0 0 12px rgba(30, 41, 59, 0.5))' : undefined
+                      }}
+                    />
+                  );
+                })}
+              </g>
+            ) : deduplicate && singleLineMode === 'boolean' && booleanPaths.length > 0 ? (
+              <g fill="none" stroke="#334155" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                {booleanPaths.map((d, i) => (
+                  <path key={i} d={d} className="hover:stroke-indigo-500 hover:stroke-[3] transition-all cursor-help" />
+                ))}
+              </g>
+            ) : (
+              <g fill="none" stroke="#334155" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                {productionAreas.map(area => (
+                  <path
+                    key={area.id}
+                    d={area.pathData}
+                    className="hover:stroke-indigo-500 hover:stroke-[3] transition-all cursor-help"
+                  />
+                ))}
+              </g>
+            )}
           </svg>
           
           {isProcessing && (
