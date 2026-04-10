@@ -70,7 +70,7 @@ export function findNeighborPiece(
     if (id === currentPieceId) continue;
     const area = areas[id];
     if (area.type === AreaType.PIECE) {
-      if (area.boundary.contains(testPoint)) {
+      if (area.boundary.bounds.contains(testPoint) && area.boundary.contains(testPoint)) {
         return id;
       }
     }

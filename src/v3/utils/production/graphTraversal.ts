@@ -20,8 +20,6 @@ export interface GraphPath {
   color: string;
 }
 
-const DIRECTION_BREAK_THRESHOLD_DEG = 135;
-
 const GRAPH_PATH_COLORS = [
   '#e63946', '#2a9d8f', '#e9c46a', '#457b9d', '#f4a261',
   '#6a4c93', '#1982c4', '#8ac926', '#ff595e', '#6a0572',
@@ -52,7 +50,7 @@ function angleBetweenDeg(dx1: number, dy1: number, dx2: number, dy2: number): nu
  *    in the same direction. Starts a new path on sharp direction changes or
  *    dead ends.
  */
-export function buildGraphPaths(areas: ProductionArea[], tolerance = 0.5): GraphPath[] {
+export function buildGraphPaths(areas: ProductionArea[], tolerance = 0.05): GraphPath[] {
   paper.setup(new paper.Size(1, 1));
 
   // --- Step 1: Combine all paths and subdivide at intersections ---
@@ -194,50 +192,68 @@ export function buildGraphPaths(areas: ProductionArea[], tolerance = 0.5): Graph
     }
   });
 
-  // --- Step 5: Remove edges that pass through intermediate nodes ---
+  // --- Step 5: Split edges that pass through intermediate nodes ---
   // This validates that the segment splitting worked correctly
   const allNodes = Array.from(nodeMap.values());
-  const filteredSegments: typeof uniqueSegments = [];
+  const splitSegments = [];
+  const splitSeen = new Set<string>();
+  for (const newSeg of uniqueSegments) {
+    const splitQueue: typeof uniqueSegments = [];
+    splitQueue.push(newSeg);
+    let queueIndex = 0;
+    while (queueIndex < splitQueue.length) {
+      const seg = splitQueue[queueIndex++];
+      const p1 = seg.n1;
+      const p2 = seg.n2;
+      const dx = p2.x - p1.x;
+      const dy = p2.y - p1.y;
+      const segLen = Math.sqrt(dx * dx + dy * dy);
 
-  for (const seg of uniqueSegments) {
-    const p1 = seg.n1;
-    const p2 = seg.n2;
-    const dx = p2.x - p1.x;
-    const dy = p2.y - p1.y;
-    const segLen = Math.sqrt(dx * dx + dy * dy);
+      if (segLen < 0.01) continue; // Skip zero-length segments
 
-    if (segLen < 0.01) continue; // Skip zero-length segments
+      let passesThrough = false;
 
-    let passesThrough = false;
+      for (const node of allNodes) {
+        if (node.id === p1.id || node.id === p2.id) continue;
 
-    for (const node of allNodes) {
-      if (node.id === p1.id || node.id === p2.id) continue;
-
-      // Check if node lies on segment (within tolerance)
-      const t = ((node.x - p1.x) * dx + (node.y - p1.y) * dy) / (segLen * segLen);
-      if (t > 0.01 && t < 0.99) {
-        const closestX = p1.x + t * dx;
-        const closestY = p1.y + t * dy;
-        const dist = Math.sqrt((node.x - closestX) ** 2 + (node.y - closestY) ** 2);
-        if (dist < tolerance) {
-          console.warn(`Segment ${p1.id}-${p2.id} passes through node ${node.id}. Skipping.`);
-          passesThrough = true;
-          break;
+        // Check if node lies on segment (within tolerance)
+        const t = ((node.x - p1.x) * dx + (node.y - p1.y) * dy) / (segLen * segLen);
+        if (t > 0.01 && t < 0.99) {
+          const closestX = p1.x + t * dx;
+          const closestY = p1.y + t * dy;
+          const dist = Math.sqrt((node.x - closestX) ** 2 + (node.y - closestY) ** 2);
+          if (dist < tolerance) {
+            console.warn(`Segment ${p1.id}-${p2.id} passes through node ${node.id}. Splitting.`);
+            const newSeg1 = { n1: p1, n2: node };
+            const newSeg2 = { n1: node, n2: p2 };
+            splitQueue.push(newSeg1, newSeg2);
+            passesThrough = true;
+            break;
+          }
         }
       }
-    }
-
-    if (!passesThrough) {
-      filteredSegments.push(seg);
+      if ((!passesThrough) && !splitSeen.has(`${p1.id}-${p2.id}`) && !splitSeen.has(`${p2.id}-${p1.id}`)) {
+        if (p1.id === 273 && p2.id === 274) {
+          console.log('Adding segment', p1, p2);
+        }
+        splitSeen.add(`${p1.id}-${p2.id}`);
+        splitSegments.push(seg);
+      }
     }
   }
+  const filteredSegments = splitSegments;
+ 
+  // filteredSegments = uniqueSegments; // Skip this validation for now since it can be expensive and the splitting should have handled it
 
   // --- Step 4: Build adjacency list ---
   const nodeById = new Map<number, GraphNode>();
   const adjacency = new Map<number, { edgeId: number; neighborId: number; dx: number; dy: number }[]>();
   const addHalfEdge = (nodeId: number, edgeId: number, neighborId: number, dx: number, dy: number) => {
     if (!adjacency.has(nodeId)) adjacency.set(nodeId, []);
-    adjacency.get(nodeId)!.push({ edgeId, neighborId, dx, dy });
+    // Do not consider the node to be neighbors to itself when  counting the adjacency lists.
+    if (neighborId !== nodeId) {
+      adjacency.get(nodeId)!.push({ edgeId, neighborId, dx, dy });
+    }
   };
 
   let edgeIdCounter = 0;
@@ -289,17 +305,47 @@ export function buildGraphPaths(areas: ProductionArea[], tolerance = 0.5): Graph
   const oddDegreeNodes = nodes.filter(n => ((adjacency.get(n.id) || []).length % 2) === 1);
   const startCandidates = oddDegreeNodes.length > 0 ? oddDegreeNodes : nodes;
 
-  const findNextNodeWithUnvisitedEdges = (): GraphNode | null => {
-    // First try remaining odd-degree start candidates
-    for (const n of startCandidates) {
-      const edges = adjacency.get(n.id) || [];
-      if (edges.some(e => !visitedEdges.has(e.edgeId))) return n;
+  const findNextNodeWithUnvisitedEdges = (currentNodeId?: number): GraphNode | null => {
+    const hasUnvisited = (n: GraphNode) => (adjacency.get(n.id) || []).some(e => !visitedEdges.has(e.edgeId));
+
+    // If a current node is provided, pick the nearest node with unvisited edges
+    if (typeof currentNodeId === 'number') {
+      const current = nodeById.get(currentNodeId) || null;
+      if (current) {
+        let best: GraphNode | null = null;
+        let bestDistSq = Infinity;
+        const updateBest = (n: GraphNode) => {
+          const dx = current.x - n.x;
+          const dy = current.y - n.y;
+          const distSq = dx * dx + dy * dy;
+          if (distSq < bestDistSq) {
+            bestDistSq = distSq;
+            best = n;
+          }
+        };
+        for (const n of oddDegreeNodes) {
+          if (!hasUnvisited(n)) continue;
+          updateBest(n);
+          }
+          if (best) return best;
+        for (const n of nodes) {
+          if (!hasUnvisited(n)) continue;
+          updateBest(n);
+        }
+        if (best) return best;
+      }
     }
-    // Then any node with unvisited edges
-    for (const n of nodes) {
-      const edges = adjacency.get(n.id) || [];
-      if (edges.some(e => !visitedEdges.has(e.edgeId))) return n;
-    }
+    else{
+      // First try remaining odd-degree start candidates
+      // Then any node with unvisited edges
+      for (const n of startCandidates) {
+        if (hasUnvisited(n)) return n;
+      }
+      for (const n of nodes) {
+        if (hasUnvisited(n)) return n;
+      }
+  }
+
     return null;
   };
 
@@ -321,20 +367,14 @@ export function buildGraphPaths(areas: ProductionArea[], tolerance = 0.5): Graph
       }
 
       // Pick edge with smallest angle to current direction
-      // Strongly prefer continuing straight (angle < 5°)
       let bestEdge = candidates[0];
-      let bestAngle = Infinity;
-
       if (dirDx !== null && dirDy !== null) {
-        for (const edge of candidates) {
-          const angle = angleBetweenDeg(dirDx, dirDy, edge.dx, edge.dy);
-          // If we can continue nearly straight, always do so
-          if (angle < 5 && bestAngle >= 5) {
+        let bestAngle = angleBetweenDeg(dirDx, dirDy, candidates[0].dx, candidates[0].dy);
+        for (let i = 1; i < candidates.length; i++) {
+          const angle = angleBetweenDeg(dirDx, dirDy, candidates[i].dx, candidates[i].dy);
+          if (angle < bestAngle) {
             bestAngle = angle;
-            bestEdge = edge;
-          } else if (angle < bestAngle) {
-            bestAngle = angle;
-            bestEdge = edge;
+            bestEdge = candidates[i];
           }
         }
       }
@@ -356,7 +396,7 @@ export function buildGraphPaths(areas: ProductionArea[], tolerance = 0.5): Graph
     }
 
     // Find next node with unvisited edges to continue
-    startNode = findNextNodeWithUnvisitedEdges();
+    startNode = findNextNodeWithUnvisitedEdges(currentNodeId);
   }
 
   return graphPaths;
@@ -375,6 +415,10 @@ export function buildGraphPaths(areas: ProductionArea[], tolerance = 0.5): Graph
  * Returns cleaned production areas with dead-end edges removed.
  */
 export function cleanGraphAreas(areas: ProductionArea[], tolerance = 0.5): ProductionArea[] {
+  const graphPaths = buildGraphPaths(areas, tolerance);
+  return [];
+}
+export function cleanGraphAreas2(areas: ProductionArea[], tolerance = 0.5): ProductionArea[] {
   paper.setup(new paper.Size(1, 1));
 
   // Build initial graph from all areas
@@ -533,8 +577,10 @@ export function cleanGraphAreas(areas: ProductionArea[], tolerance = 0.5): Produ
   filteredSegments.forEach(seg => {
     if (!adjacency.has(seg.n1.id)) adjacency.set(seg.n1.id, []);
     if (!adjacency.has(seg.n2.id)) adjacency.set(seg.n2.id, []);
-    adjacency.get(seg.n1.id)!.push(seg.n2.id);
-    adjacency.get(seg.n2.id)!.push(seg.n1.id);
+    if (seg.n1.id !== seg.n2.id) {
+      adjacency.get(seg.n1.id)!.push(seg.n2.id);
+      adjacency.get(seg.n2.id)!.push(seg.n1.id);
+    }
   });
 
   // Convert remaining edges back to Paper.js paths

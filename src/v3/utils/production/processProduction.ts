@@ -74,6 +74,7 @@ export function processProductionState(puzzleState: PuzzleState, options: Proces
   pieceIds.forEach(pieceId => {
     const originalPath = originalPiecePaths[pieceId];
     const pieceConnectors = allConnectors.filter(c => c.pieceId === pieceId);
+    if (pieceConnectors.length === 0) return; // nothing to expand
 
     // A. Expand piece with its connectors
     const currentPath = piecePaths[pieceId];
