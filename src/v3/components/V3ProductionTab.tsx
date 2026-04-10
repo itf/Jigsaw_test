@@ -18,6 +18,7 @@ export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, o
   const [mergeThreshold, setMergeThreshold] = useState(100);
   const [deduplicate, setDeduplicate] = useState(true);
   const [flattenCurves, setFlattenCurves] = useState(true);
+  const [useLegacyMerge, setUseLegacyMerge] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [graphPaths, setGraphPaths] = useState<GraphPath[]>([]);
   const [selectedPathId, setSelectedPathId] = useState<number | null>(null);
@@ -30,7 +31,7 @@ export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, o
     // Use setTimeout to allow UI to update before heavy processing
     setTimeout(() => {
       try {
-        const processed = processProductionState(puzzleState, { flattenCurves });
+        const processed = processProductionState(puzzleState, { flattenCurves, useLegacyMerge });
         setProductionAreas(processed);
       } catch (e) {
         console.error('Production processing failed:', e);
@@ -38,7 +39,7 @@ export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, o
         setIsProcessing(false);
       }
     }, 100);
-  }, [puzzleState, flattenCurves]);
+  }, [puzzleState, flattenCurves, useLegacyMerge]);
 
   // Recompute single-line paths whenever areas, deduplicate, or mode changes
   useEffect(() => {
@@ -155,6 +156,20 @@ export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, o
               />
               <span className="text-xs font-bold text-slate-500 uppercase tracking-wider group-hover:text-slate-700 transition-colors">
                 Flatten Curves
+              </span>
+            </label>
+
+            <div className="w-px h-4 bg-slate-300" />
+
+            <label className="flex items-center gap-2 cursor-pointer group">
+              <input
+                type="checkbox"
+                checked={useLegacyMerge}
+                onChange={e => setUseLegacyMerge(e.target.checked)}
+                className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
+              />
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider group-hover:text-slate-700 transition-colors">
+                Legacy Boolean Merge
               </span>
             </label>
 

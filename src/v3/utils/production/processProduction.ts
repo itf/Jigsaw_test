@@ -24,10 +24,11 @@ export interface ProductionArea {
 export interface ProcessProductionOptions {
   flattenCurves?: boolean;
   flattenTolerance?: number;
+  useLegacyMerge?: boolean;
 }
 
 export function processProductionState(puzzleState: PuzzleState, options: ProcessProductionOptions = {}): ProductionArea[] {
-  const { flattenCurves = true, flattenTolerance = 0.5 } = options;
+  const { flattenCurves = true, flattenTolerance = 0.5, useLegacyMerge = false } = options;
   const { areas, connectors, width, height } = puzzleState;
 
   // Initialize a temporary Paper.js project for processing
@@ -78,7 +79,14 @@ export function processProductionState(puzzleState: PuzzleState, options: Proces
 
     // A. Expand piece with its connectors
     const currentPath = piecePaths[pieceId];
-    const expandedPiece = mergeAllConnectorsForPiece(currentPath, originalPath, pieceConnectors, puzzleState.whimsies, flattenCurves ? flattenTolerance : undefined);
+    const expandedPiece = mergeAllConnectorsForPiece(
+      currentPath, 
+      originalPath, 
+      pieceConnectors, 
+      puzzleState.whimsies, 
+      flattenCurves ? flattenTolerance : undefined,
+      useLegacyMerge
+    );
     currentPath.remove();
     piecePaths[pieceId] = expandedPiece;
 

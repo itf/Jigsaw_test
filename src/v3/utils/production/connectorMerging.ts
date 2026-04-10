@@ -14,7 +14,8 @@ export function mergeAllConnectorsForPiece(
   originalPath: paper.PathItem,
   pieceConnectors: Connector[],
   whimsies: Whimsy[],
-  flattenTolerance?: number
+  flattenTolerance?: number,
+  useLegacyBooleanMerge?: boolean
 ): paper.PathItem {
   if (pieceConnectors.length === 0) return targetPath.clone({ insert: false });
 
@@ -64,7 +65,18 @@ export function mergeAllConnectorsForPiece(
   let currentPath = targetPath.clone({ insert: false });
   
   for (const c of calculated) {
-    const nextPath = currentPath.unite(c.path, {insert:false});
+    let nextPath: paper.PathItem;
+    if (useLegacyBooleanMerge) {
+      nextPath = currentPath.unite(c.path, { insert: false });
+    } else {
+      nextPath = mergePathsAtPoints(
+        currentPath,
+        c.path,
+        c.p1,
+        c.p2,
+        c.pathIndex
+      );
+    }
     currentPath.remove();
     currentPath = nextPath;
     c.path.remove();

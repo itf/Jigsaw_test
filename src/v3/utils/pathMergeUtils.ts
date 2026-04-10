@@ -18,11 +18,12 @@ export function getExactSegment(path: paper.Path, offset1: number, offset2: numb
 
   let newO2 = (o2 - o1 + len) % len;
   // If offsets were different but wrapped to the same value, we want the full loop
-  if (Math.abs(newO2) < 0.00001 && Math.abs(offset1 - offset2) > 0.00001) {
+  if (newO2 < 0.0001 && Math.abs(offset1 - offset2) > 0.0001) {
     newO2 = len;
   }
 
-  if (newO2 > 0 && newO2 < len - 0.001) {
+  // Use a much smaller threshold for splitting to avoid degenerating the path
+  if (newO2 > 0.0001 && newO2 < len - 0.0001) {
     const secondPart = clone.splitAt(newO2);
     if (secondPart) secondPart.remove();
   }
@@ -143,12 +144,8 @@ export function mergePathsAtPoints(
   subSegment.remove();
   sub.remove();
 
-  // 7. Restore original winding
-  if (!wasClockwise) {
-    (merged as paper.Path).reverse();
-  }
-
-  // 8. Clean up the spliced path
+  // 7. Clean up the spliced path BEFORE restoring winding
+  // resolveCrossings works best on CW paths (natural winding)
   try {
     const resolved = (merged as any).resolveCrossings();
     if (resolved) {
@@ -177,8 +174,9 @@ export function mergePathsAtPoints(
           // If we have multiple "valid" paths, the one with the largest area is 
           // almost certainly the intended boundary.
           validChildren.sort((a, b) => Math.abs(b.area) - Math.abs(a.area));
+          
+          // Keep the best one, remove others
           const best = validChildren[0];
-          // Remove the others (debris that passed the initial filter)
           for (let i = 1; i < validChildren.length; i++) {
             validChildren[i].remove();
           }
@@ -195,7 +193,14 @@ export function mergePathsAtPoints(
       }
     }
   } catch (e) {
-    // Ignore resolveCrossings errors
+    console.error('[mergePathsAtPoints] resolveCrossings failed:', e);
+  }
+
+  // 8. Restore original winding
+  if (!wasClockwise) {
+    (merged as paper.Path).reorient(false, true);
+  } else {
+    (merged as paper.Path).reorient(true, true);
   }
 
   // 9. Replace the original sub-path with the merged result
