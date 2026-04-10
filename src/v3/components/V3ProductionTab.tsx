@@ -1,13 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import paper from 'paper';
 import { RefreshCw, Download, Layers, Trash2 } from 'lucide-react';
 import { PuzzleState } from '../types';
 import { processProductionState, ProductionArea } from '../utils/production/processProduction';
 
 import { mergeSmallAreas } from '../utils/production/mergeSmallAreas';
 import { deduplicateProductionPaths } from '../utils/production/deduplicatePaths';
-import { buildGraphPaths, GraphPath } from '../utils/production/graphTraversal';
-import { removeDanglingEdges } from '../utils/paperUtils';
+import { buildGraphPaths, GraphPath, cleanGraphAreas } from '../utils/production/graphTraversal';
 import { AlertCircle, Info, Scissors, Zap } from 'lucide-react';
 
 interface V3ProductionTabProps {
@@ -75,72 +73,15 @@ export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, o
     setProductionAreas(merged);
   }, [productionAreas, mergeThreshold]);
   
-  const handleCleanGeometry = useCallback(() => {
+  const handleCleanGraph = useCallback(() => {
     if (productionAreas.length === 0) return;
     setIsProcessing(true);
     setTimeout(() => {
       try {
-        // 1. Get all cut lines
-        const pathDatas = productionAreas.map(a => a.pathData);
-        const cleanedLines = removeDanglingEdges(pathDatas);
-        
-        // 2. Setup Paper.js to re-extract areas
-        const canvas = document.createElement('canvas');
-        paper.setup(canvas);
-        
-        // Create a single CompoundPath of all cleaned lines
-        const allLines = new paper.CompoundPath({
-          pathData: cleanedLines.join(' '),
-          insert: false
-        });
-        
-        // Create the overall puzzle boundary by uniting all original pieces
-        let puzzleBoundary: paper.PathItem | null = null;
-        productionAreas.forEach(a => {
-          const p = new paper.CompoundPath(a.pathData);
-          if (!puzzleBoundary) {
-            puzzleBoundary = p;
-          } else {
-            const united = puzzleBoundary.unite(p);
-            puzzleBoundary.remove();
-            puzzleBoundary = united;
-          }
-        });
-        
-        if (!puzzleBoundary) throw new Error("Could not determine puzzle boundary");
-        
-        // 3. Divide the boundary by the cleaned lines to get the new pieces
-        const divided = puzzleBoundary.divide(allLines);
-        
-        const nextAreas: ProductionArea[] = [];
-        const processResult = (item: paper.Item) => {
-          if (item instanceof paper.Path || item instanceof paper.CompoundPath) {
-            const areaValue = Math.abs((item as any).area || 0);
-            if (areaValue > 1) { // Ignore tiny artifacts
-              nextAreas.push({
-                id: `cleaned-${nextAreas.length}`,
-                pathData: item.pathData,
-                color: '#334155',
-                area: areaValue
-              });
-            }
-          } else if (item instanceof paper.Group) {
-            item.children.forEach(processResult);
-          }
-        };
-        
-        processResult(divided);
-        
-        setProductionAreas(nextAreas);
-        
-        // Cleanup
-        allLines.remove();
-        puzzleBoundary.remove();
-        divided.remove();
-        paper.project.clear();
-        
+        const cleaned = cleanGraphAreas(productionAreas);
+        setProductionAreas(cleaned);
       } catch (e) {
-        console.error('Cleaning failed:', e);
+        console.error('Graph cleaning failed:', e);
       } finally {
         setIsProcessing(false);
       }
@@ -263,13 +204,13 @@ export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, o
             <div className="w-px h-4 bg-slate-300" />
 
             <button
-              onClick={handleCleanGeometry}
+              onClick={handleCleanGraph}
               disabled={isProcessing || productionAreas.length === 0}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 text-rose-700 border border-rose-200 rounded-lg hover:bg-rose-100 disabled:opacity-50 transition-all text-xs font-bold uppercase tracking-wider"
-              title="Remove dangling edges and artifacts"
+              title="Remove dead-end edges (degree-1 nodes)"
             >
               <Scissors className="w-3.5 h-3.5" />
-              Clean Geometry
+              Clean Graph
             </button>
           </div>
         </div>
