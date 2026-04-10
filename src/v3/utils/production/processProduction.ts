@@ -75,8 +75,7 @@ export function processProductionState(puzzleState: PuzzleState, options: Proces
   pieceIds.forEach(pieceId => {
     const originalPath = originalPiecePaths[pieceId];
     const pieceConnectors = allConnectors.filter(c => c.pieceId === pieceId);
-    if (pieceConnectors.length === 0) return; // nothing to expand
-
+    
     // A. Expand piece with its connectors
     const currentPath = piecePaths[pieceId];
     const expandedPiece = mergeAllConnectorsForPiece(
@@ -113,11 +112,18 @@ export function processProductionState(puzzleState: PuzzleState, options: Proces
     const components = getDisconnectedComponents(path);
 
     components.forEach((comp, index) => {
+      const area = Math.abs((comp as any).area || 0);
+      // Filter out tiny debris components (area < 0.5px)
+      if (area < 0.5) {
+        comp.remove();
+        return;
+      }
+
       finalAreas.push({
         id: components.length > 1 ? `${id}-part-${index}` : id,
         pathData: comp.pathData,
         color: pieceColors[id],
-        area: Math.abs((comp as any).area || 0)
+        area: area
       });
       comp.remove();
     });

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { RefreshCw, Download, Layers, Trash2 } from 'lucide-react';
+import { RefreshCw, Download, Layers, Trash2, Bug } from 'lucide-react';
 import { PuzzleState } from '../types';
 import { processProductionState, ProductionArea } from '../utils/production/processProduction';
 
@@ -88,6 +88,23 @@ export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, o
       }
     }, 100);
   }, [productionAreas]);
+
+  const handleDownloadDebugJSON = useCallback(() => {
+    const debugData = {
+      puzzleState,
+      timestamp: new Date().toISOString(),
+      settings: { flattenCurves, useLegacyMerge }
+    };
+    const blob = new Blob([JSON.stringify(debugData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `production-debug-${new Date().getTime()}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }, [puzzleState, flattenCurves, useLegacyMerge]);
 
   const handleDownloadSVG = useCallback(() => {
     if (productionAreas.length === 0) return;
@@ -241,6 +258,14 @@ export const V3ProductionTab: React.FC<V3ProductionTabProps> = ({ puzzleState, o
           >
             <Zap className="w-4 h-4" />
             Resolve Conflicts
+          </button>
+          <button
+            onClick={handleDownloadDebugJSON}
+            className="flex items-center gap-2 px-4 py-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-all shadow-sm font-medium border border-slate-200"
+            title="Download full state for debugging"
+          >
+            <Bug className="w-4 h-4" />
+            Debug JSON
           </button>
           <button
             onClick={handleDownloadSVG}

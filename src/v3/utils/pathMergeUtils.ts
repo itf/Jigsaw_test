@@ -1,4 +1,5 @@
 import paper from 'paper';
+import { cleanPath } from './paperUtils';
 
 /**
  * Extracts the exact Bezier segment of a path between two offsets.
@@ -60,15 +61,27 @@ export function mergePathsAtPoints(
   if (resultPath instanceof paper.CompoundPath) {
     const children = resultPath.children;
     let idx = -1;
-    if (mainPathIndex !== undefined) {
-      idx = Math.max(0, Math.min(mainPathIndex, children.length - 1));
-    } else {
+    
+    // Try to use the provided index first if it's valid and close to p1
+    if (mainPathIndex !== undefined && mainPathIndex >= 0 && mainPathIndex < children.length) {
+      const candidate = children[mainPathIndex];
+      if (candidate instanceof paper.Path) {
+        const loc = candidate.getNearestLocation(p1);
+        // Increase threshold to 5px to account for boundary shifts from subtractions
+        if (loc && loc.point.getDistance(p1) < 5.0) {
+          idx = mainPathIndex;
+        }
+      }
+    }
+    
+    // Fallback to nearest location if index was missing or invalid
+    if (idx === -1) {
       const loc = resultPath.getNearestLocation(p1);
       if (!loc) return resultPath;
       idx = children.indexOf(loc.path);
     }
+    
     if (idx === -1 || !(children[idx] instanceof paper.Path)) {
-      // Fallback: find closest path if index is invalid or not a path
       const loc = resultPath.getNearestLocation(p1);
       if (!loc) return resultPath;
       main = loc.path as paper.Path;
@@ -111,16 +124,32 @@ export function mergePathsAtPoints(
   // For a CCW main path that was forced to CW: the traversal direction is reversed, so to keep
   // the majority of the original boundary we must extract p1 to p2 instead (then reverse it).
   let mainSegment: paper.Path;
-  if (wasClockwise) {
-    // CW: keep p2 → p1 (the "long way" around in CW direction)
-    mainSegment = getExactSegment(main, loc2Main.offset, loc1Main.offset);
-  } else {
-    // Was CCW (hole): after forcing to CW, the long arc from p2→p1 (original CCW)
-    // is now the short arc p1→p2 in CW space. Extract p1→p2 then reverse to get CCW.
-    mainSegment = getExactSegment(main, loc1Main.offset, loc2Main.offset, true);
+  try {
+    if (wasClockwise) {
+      // CW: keep p2 → p1 (the "long way" around in CW direction)
+      mainSegment = getExactSegment(main, loc2Main.offset, loc1Main.offset);
+    } else {
+      // Was CCW (hole): after forcing to CW, the long arc from p2→p1 (original CCW)
+      // is now the short arc p2→p1 in CW space (because offsets reversed).
+      // We want the long arc p1→p2 in CW space, then reverse it back to CCW.
+      mainSegment = getExactSegment(main, loc1Main.offset, loc2Main.offset, true);
+    }
+  } catch (e) {
+    console.error('Failed to extract main segment:', e);
+    sub.remove();
+    return resultPath;
   }
+  
   // Sub: segment from p1 to p2 CW (the connector outline from p1 to p2)
-  const subSegment = getExactSegment(sub, loc1Sub.offset, loc2Sub.offset);
+  let subSegment: paper.Path;
+  try {
+    subSegment = getExactSegment(sub, loc1Sub.offset, loc2Sub.offset);
+  } catch (e) {
+    console.error('Failed to extract sub segment:', e);
+    mainSegment.remove();
+    sub.remove();
+    return resultPath;
+  }
 
   // Ensure the endpoints match exactly to avoid tiny gaps or overlaps
   if (mainSegment.lastSegment && subSegment.firstSegment) {
@@ -131,72 +160,23 @@ export function mergePathsAtPoints(
   }
 
   let merged: paper.PathItem = mainSegment;
-  (merged as paper.Path).join(subSegment);
-  (merged as paper.Path).closed = true;
-  
-  // Clean up redundant segments and handles that can cause resolveCrossings to fail or create debris
   try {
-    (merged as any).reduce();
+    (merged as paper.Path).join(subSegment);
+    (merged as paper.Path).closed = true;
   } catch (e) {
-    // Ignore reduce errors
+    console.error('Failed to join segments:', e);
+    mainSegment.remove();
+    subSegment.remove();
+    sub.remove();
+    return resultPath;
   }
   
   subSegment.remove();
   sub.remove();
 
   // 7. Clean up the spliced path BEFORE restoring winding
-  // resolveCrossings works best on CW paths (natural winding)
-  try {
-    const resolved = (merged as any).resolveCrossings();
-    if (resolved) {
-      if (resolved instanceof paper.CompoundPath) {
-        // If resolveCrossings returned multiple paths, filter out degenerate or tiny debris paths
-        const validChildren = resolved.children.filter(c => {
-          if (!(c instanceof paper.Path)) {
-            c.remove();
-            return false;
-          }
-          const p = c as paper.Path;
-          // Debris usually has very small length or area
-          const hasLength = p.length > 1.0;
-          const hasArea = Math.abs(p.area) > 0.5;
-          if (hasLength && hasArea) return true;
-          
-          c.remove();
-          return false;
-        }) as paper.Path[];
-
-        if (validChildren.length === 1) {
-          const first = validChildren[0];
-          merged.remove();
-          merged = first;
-        } else if (validChildren.length > 1) {
-          // If we have multiple "valid" paths, the one with the largest area is 
-          // almost certainly the intended boundary.
-          validChildren.sort((a, b) => Math.abs(b.area) - Math.abs(a.area));
-          
-          // Keep the best one, remove others
-          const best = validChildren[0];
-          for (let i = 1; i < validChildren.length; i++) {
-            validChildren[i].remove();
-          }
-          merged.remove();
-          merged = best;
-        } else {
-          // All children were degenerate? Keep original merged but it might be broken
-          resolved.remove();
-        }
-      } else if (resolved !== merged) {
-        const old = merged;
-        merged = resolved;
-        old.remove();
-      }
-    }
-  } catch (e) {
-    console.error('[mergePathsAtPoints] resolveCrossings failed:', e);
-  }
-
-  // 8. Restore original winding
+  merged = cleanPath(merged);
+  
   if (!wasClockwise) {
     (merged as paper.Path).reorient(false, true);
   } else {
@@ -221,18 +201,25 @@ export function mergePathsAtPoints(
       
       if (childIdx !== -1) {
         main.replaceWith(mergedPaths[0]);
-        // Restore original winding: holes must remain CCW for even-odd fill to work
-        if (mergedPaths[0] instanceof paper.Path) {
-          mergedPaths[0].clockwise = wasClockwise;
-        }
+        
         // Add any additional paths resulting from the merge (e.g. if a hole was split)
         // We insert them immediately after the first one to keep related paths together
         for (let i = 1; i < mergedPaths.length; i++) {
           resultPath.insertChild(childIdx + i, mergedPaths[i]);
         }
+
+        // Restore original winding for ALL resulting paths: holes must remain CCW
+        mergedPaths.forEach(p => {
+          if (p instanceof paper.Path) {
+            p.clockwise = wasClockwise;
+          }
+        });
       } else {
         // Fallback if replaceWith failed for some reason
         resultPath.addChild(mergedPaths[0]);
+        if (mergedPaths[0] instanceof paper.Path) {
+          mergedPaths[0].clockwise = wasClockwise;
+        }
       }
     }
 

@@ -1,6 +1,35 @@
 import paper from 'paper';
 import { Area, AreaType } from '../types';
 
+// Extend Paper.js prototype to include reorient if missing
+if (!(paper as any).Item.prototype.reorient) {
+  (paper as any).Item.prototype.reorient = function(this: paper.Item, clockwise: boolean, resolve: boolean) {
+    if (this instanceof paper.Path) {
+      this.clockwise = clockwise;
+      if (resolve) {
+        try {
+          const resolved = (this as any).resolveCrossings();
+          if (resolved && resolved !== this) {
+            this.replaceWith(resolved);
+          }
+        } catch (e) {
+          // Ignore resolve errors
+        }
+      }
+    } else if (this instanceof paper.CompoundPath) {
+      // For CompoundPath, we want the outer boundary to be CW and holes to be CCW (if clockwise=true)
+      // Paper.js usually handles this if we set clockwise on children
+      this.children.forEach((child: any) => {
+        if (child instanceof paper.Path) {
+          // This is a simplified version of reorientation
+          child.clockwise = clockwise;
+        }
+      });
+    }
+    return this;
+  };
+}
+
 /**
  * Parse stored SVG path data from `Area.boundary` (or merged boundaries).
  * Multi-subpath strings (holes, disjoint loops) must use CompoundPath.
@@ -98,41 +127,124 @@ export function getClosestLocationOnBoundary(boundary: paper.PathItem, targetPoi
 export function cleanPath(path: paper.PathItem): paper.PathItem {
   if (!path || path.isEmpty()) return path;
   
-  // resolveCrossings() is a powerful Paper.js method that cleans up 
-  // self-intersections and overlapping segments.
-  if (path instanceof paper.Path || path instanceof paper.CompoundPath) {
+  let result = path;
+
+  // 1. Resolve crossings and handle CompoundPath debris
+  if (result instanceof paper.Path || result instanceof paper.CompoundPath) {
     try {
-      // resolveCrossings can sometimes fail on extremely complex paths, so we wrap it
-      const resolved = (path as any).resolveCrossings();
-      if (resolved && resolved !== path) {
-        path.remove();
-        path = resolved;
+      // Ensure basic orientation before resolving
+      if (result instanceof paper.Path) {
+        result.clockwise = true;
+      }
+
+      const resolved = (result as any).resolveCrossings();
+      if (resolved) {
+        if (resolved instanceof paper.CompoundPath) {
+          // Filter out ONLY extremely small debris that is likely a boolean artifact.
+          // We must be very conservative to avoid eating small holes (like in a donut).
+          const validChildren = resolved.children.filter(c => {
+            if (!(c instanceof paper.Path)) {
+              c.remove();
+              return false;
+            }
+            const p = c as paper.Path;
+            // Very small threshold: 0.01px area is tiny, but a donut hole (r=0.4) is ~0.5.
+            const hasLength = p.length > 0.01;
+            const hasArea = Math.abs(p.area) > 0.001;
+            
+            // Also check for "spikes" - segments that are nearly identical
+            if (p.segments.length < 2) {
+              c.remove();
+              return false;
+            }
+
+            if (hasLength && hasArea) return true;
+            
+            c.remove();
+            return false;
+          }) as paper.Path[];
+
+          if (validChildren.length === 1) {
+            const only = validChildren[0];
+            const cloned = only.clone({ insert: false });
+            result.remove();
+            resolved.remove();
+            result = cloned;
+          } else if (validChildren.length > 1) {
+            const cp = new paper.CompoundPath({ children: validChildren.map(c => c.clone({ insert: false })), insert: false });
+            result.remove();
+            resolved.remove();
+            result = cp;
+          } else {
+            resolved.remove();
+          }
+        } else if (resolved !== result) {
+          const old = result;
+          result = resolved.clone({ insert: false });
+          old.remove();
+          resolved.remove();
+        }
       }
     } catch (e) {
       console.warn('resolveCrossings failed, skipping...', e);
     }
   }
 
-  // We manually remove extremely small segments that boolean ops sometimes leave
-  const removeTiny = (p: paper.Path) => {
+  // 2. Gentle segment cleanup and spike removal
+  let changed = true;
+  let iters = 0;
+
+  const cleanup = (p: paper.Path): boolean => {
+    let localChanged = false;
+    // Remove zero-length segments
     for (let i = p.segments.length - 1; i >= 0; i--) {
       const seg = p.segments[i];
       const next = p.segments[(i + 1) % p.segments.length];
-      if (seg.point.getDistance(next.point) < 0.01) {
+      if (seg.point.getDistance(next.point) < 1e-6) {
         p.removeSegment(i);
+        localChanged = true;
       }
     }
+
+    // Remove "spikes" (A -> B -> A)
+    if (p.segments.length > 2) {
+      for (let i = p.segments.length - 1; i >= 0; i--) {
+        if (p.segments.length <= 2) break;
+        const prev = p.segments[(i - 1 + p.segments.length) % p.segments.length];
+        const curr = p.segments[i];
+        const next = p.segments[(i + 1) % p.segments.length];
+        
+        const v1 = curr.point.subtract(prev.point);
+        const v2 = next.point.subtract(curr.point);
+        
+        // If vectors are opposite and nearly same length, it's a spike
+        if (v1.length > 0.1 && v2.length > 0.1) {
+          const dot = v1.normalize().dot(v2.normalize());
+          if (dot < -0.999 && Math.abs(v1.length - v2.length) < 0.1) {
+            p.removeSegment(i);
+            localChanged = true;
+          }
+        }
+      }
+    }
+    return localChanged;
   };
 
-  if (path instanceof paper.Path) {
-    removeTiny(path);
-  } else if (path instanceof paper.CompoundPath) {
-    path.children.forEach(child => {
-      if (child instanceof paper.Path) removeTiny(child);
-    });
+  while (changed && iters < 5) {
+    changed = false;
+    iters++;
+    if (result instanceof paper.Path) {
+      if (cleanup(result)) changed = true;
+    } else if (result instanceof paper.CompoundPath) {
+      result.children.forEach(child => {
+        if (child instanceof paper.Path) {
+          if (cleanup(child)) changed = true;
+        }
+      });
+    }
   }
   
-  return path;
+  return result;
 }
 
 /**

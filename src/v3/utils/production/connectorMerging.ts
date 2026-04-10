@@ -2,6 +2,7 @@ import paper from 'paper';
 import { Connector, Whimsy } from '../../types';
 import { generateConnectorPath } from '../connectorUtils';
 import { mergePathsAtPoints } from '../pathMergeUtils';
+import { cleanPath } from '../paperUtils';
 
 /**
  * Merges all connectors belonging to a piece into a target boundary.
@@ -69,18 +70,47 @@ export function mergeAllConnectorsForPiece(
     if (useLegacyBooleanMerge) {
       nextPath = currentPath.unite(c.path, { insert: false });
     } else {
-      nextPath = mergePathsAtPoints(
-        currentPath,
-        c.path,
-        c.p1,
-        c.p2,
-        c.pathIndex
-      );
+      // Find the actual points on the current boundary to use as the merge basis.
+      // We must ensure both p1 and p2 snap to the SAME sub-path to avoid 
+      // "jumping" across split pieces or holes.
+      const midPoint = c.p1.add(c.p2).divide(2);
+      const locMid = currentPath.getNearestLocation(midPoint);
+      if (!locMid) {
+        // Fallback to original points if something is very wrong
+        nextPath = mergePathsAtPoints(currentPath, c.path, c.p1, c.p2, c.pathIndex);
+      } else {
+        const targetSubPath = locMid.path as paper.Path;
+        const loc1 = targetSubPath.getNearestLocation(c.p1);
+        const loc2 = targetSubPath.getNearestLocation(c.p2);
+        
+        const p1 = loc1 ? loc1.point : c.p1;
+        const p2 = loc2 ? loc2.point : c.p2;
+
+        // Find the index of this sub-path in the currentPath
+        let subPathIndex = c.pathIndex;
+        if (currentPath instanceof paper.CompoundPath) {
+          subPathIndex = currentPath.children.indexOf(targetSubPath);
+        }
+
+        nextPath = mergePathsAtPoints(
+          currentPath,
+          c.path,
+          p1,
+          p2,
+          subPathIndex
+        );
+      }
     }
     currentPath.remove();
-    currentPath = nextPath;
+    currentPath = cleanPath(nextPath);
     c.path.remove();
   }
 
-  return currentPath;
+  // Final cleanup to ensure no tiny artifacts remain from the sequence of merges
+  const finalPath = cleanPath(currentPath);
+  if (finalPath !== currentPath) {
+    currentPath.remove();
+  }
+
+  return finalPath;
 }
