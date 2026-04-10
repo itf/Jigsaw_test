@@ -17,21 +17,28 @@ export function generateNeck(
   t2: number,
   sourcePath: paper.Path,
   rayDir: paper.Point
-): { neck: paper.Path, basePathData: string } {
+): { neck: paper.Path, basePath: paper.Path } {
   const neck = new paper.Path({ insert: false });
-  
+
   // A. Bottom edge: Exact segment from piece boundary
   const pieceLen = sourcePath.length;
   const pieceSegment = getExactSegment(sourcePath, t1 * pieceLen, t2 * pieceLen);
-  const basePathData = pieceSegment.pathData;
-  
+
   // B. Side 2: pt1Head to p1 (Left side when looking from base to head)
   neck.add(pt1Head);
   // The inward direction for Side 2 is perpendicular to rayDir (pointing right)
-  const inwardDir2 = new paper.Point(rayDir.y, -rayDir.x); 
+  const inwardDir2 = new paper.Point(rayDir.y, -rayDir.x);
   addNeckSide(neck, pt1Head, p1, neckShape, neckCurvature, widthPx, inwardDir2);
 
   // C. Bottom: p1 to p2
+  // Zero out endpoint handles so adjacent neck sides are not curved by
+  // bezier handles inherited from the piece boundary at p1 and p2.
+  if (pieceSegment.segments.length > 0) {
+    pieceSegment.firstSegment.handleIn = new paper.Point(0, 0);
+    pieceSegment.lastSegment.handleOut = new paper.Point(0, 0);
+  }
+  // Clone after handle modification so basePath matches exactly what joins the neck
+  const basePath = pieceSegment.clone({ insert: false }) as paper.Path;
   neck.join(pieceSegment);
 
   // D. Side 1: p2 to pt2Head (Right side when looking from base to head)
@@ -40,7 +47,7 @@ export function generateNeck(
   addNeckSide(neck, p2, pt2Head, neckShape, neckCurvature, widthPx, inwardDir1);
 
   // Return open path pt1Head -> ... -> pt2Head
-  return { neck, basePathData };
+  return { neck, basePath };
 }
 
 function addNeckSide(

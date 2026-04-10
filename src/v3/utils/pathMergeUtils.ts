@@ -86,7 +86,11 @@ export function mergePathsAtPoints(
 
   const wasClockwise = main.clockwise;
 
-  // 4. Ensure consistent winding (CW) before splicing
+  // 4. Ensure consistent winding (CW) before splicing.
+  // We always work in CW space for the splicing logic, but we must account for
+  // the original winding when choosing which arc to keep from main.
+  // If main was CCW (a hole), reversing it to CW swaps which arc is "p2→p1 the long way".
+  // We compensate by swapping the extraction order for main when it was CCW.
   main.reorient(true, true);
   sub.reorient(true, true);
 
@@ -95,16 +99,26 @@ export function mergePathsAtPoints(
   const loc2Main = main.getNearestLocation(p2);
   const loc1Sub = sub.getNearestLocation(p1);
   const loc2Sub = sub.getNearestLocation(p2);
-  
+
   if (!loc1Main || !loc2Main || !loc1Sub || !loc2Sub) {
     sub.remove();
     return resultPath;
   }
 
   // 6. Extract segments and join
-  // Main: segment from p2 back to p1 CW (the "keep" part)
-  const mainSegment = getExactSegment(main, loc2Main.offset, loc1Main.offset);
-  // Sub: segment from p1 to p2 CW (the "keep" part)
+  // For a CW main path: keep the segment from p2 back to p1 (CW traversal = "keep most of boundary")
+  // For a CCW main path that was forced to CW: the traversal direction is reversed, so to keep
+  // the majority of the original boundary we must extract p1 to p2 instead (then reverse it).
+  let mainSegment: paper.Path;
+  if (wasClockwise) {
+    // CW: keep p2 → p1 (the "long way" around in CW direction)
+    mainSegment = getExactSegment(main, loc2Main.offset, loc1Main.offset);
+  } else {
+    // Was CCW (hole): after forcing to CW, the long arc from p2→p1 (original CCW)
+    // is now the short arc p1→p2 in CW space. Extract p1→p2 then reverse to get CCW.
+    mainSegment = getExactSegment(main, loc1Main.offset, loc2Main.offset, true);
+  }
+  // Sub: segment from p1 to p2 CW (the connector outline from p1 to p2)
   const subSegment = getExactSegment(sub, loc1Sub.offset, loc2Sub.offset);
 
   let merged = mainSegment;
@@ -148,6 +162,10 @@ export function mergePathsAtPoints(
       
       if (childIdx !== -1) {
         main.replaceWith(mergedPaths[0]);
+        // Restore original winding: holes must remain CCW for even-odd fill to work
+        if (mergedPaths[0] instanceof paper.Path) {
+          mergedPaths[0].clockwise = wasClockwise;
+        }
         // Add any additional paths resulting from the merge (e.g. if a hole was split)
         // We insert them immediately after the first one to keep related paths together
         for (let i = 1; i < mergedPaths.length; i++) {

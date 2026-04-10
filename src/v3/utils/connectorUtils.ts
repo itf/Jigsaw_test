@@ -70,7 +70,7 @@ export function findNeighborPiece(
     if (id === currentPieceId) continue;
     const area = areas[id];
     if (area.type === AreaType.PIECE) {
-      if (area.boundary.contains(testPoint)) {
+      if (area.boundary.bounds.contains(testPoint) && area.boundary.contains(testPoint)) {
         return id;
       }
     }
@@ -231,12 +231,10 @@ export function generateConnectorPath(
   let pt1Head: paper.Point;
   let pt2Head: paper.Point;
 
-  // Use the midNormal as the primary ray direction for symmetry, 
-  // but ensure it points towards the head.
-  let rayDir = midNormal.normalize();
-  if (rayDir.dot(headCenter.subtract(midPoint)) < 0) {
-    rayDir = rayDir.multiply(-1);
-  }
+  // Use the chord normal (perpendicular to the p1-p2 chord) as the ray direction.
+  // This keeps the neck sides parallel regardless of boundary curvature or corners.
+  // chordNormal already points outward (same side as midNormal) from the computation above.
+  let rayDir = chordNormal;
 
   // Handle partial overlap by extending p1/p2 if one is inside the head
   const p1Inside = head.contains(p1);
@@ -308,7 +306,7 @@ export function generateConnectorPath(
   }
   
   // 5. Construct neck
-  const { neck: robustNeck, basePathData } = generateNeck(
+  const { neck: robustNeck, basePath } = generateNeck(
     p1, p2, pt1Head, pt2Head,
     neckShape, neckCurvature, widthPx,
     currentT1, currentT2, sourcePath,
@@ -319,11 +317,13 @@ export function generateConnectorPath(
   const combined = attachHead(robustNeck, head, pt1Head, pt2Head, chordMidPoint, rayDir, p1, p2);
 
   const pathData = combined.pathData;
-  
+  const basePathData = basePath.pathData;
+
   // Cleanup
   robustNeck.remove();
   head.remove();
   combined.remove();
-  
+  basePath.remove();
+
   return { pathData, basePathData, headCenter, p1, p2 };
 }
