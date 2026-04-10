@@ -121,24 +121,78 @@ export function mergePathsAtPoints(
   // Sub: segment from p1 to p2 CW (the connector outline from p1 to p2)
   const subSegment = getExactSegment(sub, loc1Sub.offset, loc2Sub.offset);
 
-  let merged = mainSegment;
-  merged.join(subSegment);
-  merged.closed = true;
+  // Ensure the endpoints match exactly to avoid tiny gaps or overlaps
+  if (mainSegment.lastSegment && subSegment.firstSegment) {
+    subSegment.firstSegment.point = mainSegment.lastSegment.point.clone();
+  }
+  if (mainSegment.firstSegment && subSegment.lastSegment) {
+    subSegment.lastSegment.point = mainSegment.firstSegment.point.clone();
+  }
+
+  let merged: paper.PathItem = mainSegment;
+  (merged as paper.Path).join(subSegment);
+  (merged as paper.Path).closed = true;
+  
+  // Clean up redundant segments and handles that can cause resolveCrossings to fail or create debris
+  try {
+    (merged as any).reduce();
+  } catch (e) {
+    // Ignore reduce errors
+  }
+  
   subSegment.remove();
   sub.remove();
 
   // 7. Restore original winding
   if (!wasClockwise) {
-    merged.reverse();
+    (merged as paper.Path).reverse();
   }
 
   // 8. Clean up the spliced path
   try {
     const resolved = (merged as any).resolveCrossings();
-    if (resolved && resolved !== merged) {
-      const old = merged;
-      merged = resolved;
-      old.remove();
+    if (resolved) {
+      if (resolved instanceof paper.CompoundPath) {
+        // If resolveCrossings returned multiple paths, filter out degenerate or tiny debris paths
+        const validChildren = resolved.children.filter(c => {
+          if (!(c instanceof paper.Path)) {
+            c.remove();
+            return false;
+          }
+          const p = c as paper.Path;
+          // Debris usually has very small length or area
+          const hasLength = p.length > 1.0;
+          const hasArea = Math.abs(p.area) > 0.5;
+          if (hasLength && hasArea) return true;
+          
+          c.remove();
+          return false;
+        }) as paper.Path[];
+
+        if (validChildren.length === 1) {
+          const first = validChildren[0];
+          merged.remove();
+          merged = first;
+        } else if (validChildren.length > 1) {
+          // If we have multiple "valid" paths, the one with the largest area is 
+          // almost certainly the intended boundary.
+          validChildren.sort((a, b) => Math.abs(b.area) - Math.abs(a.area));
+          const best = validChildren[0];
+          // Remove the others (debris that passed the initial filter)
+          for (let i = 1; i < validChildren.length; i++) {
+            validChildren[i].remove();
+          }
+          merged.remove();
+          merged = best;
+        } else {
+          // All children were degenerate? Keep original merged but it might be broken
+          resolved.remove();
+        }
+      } else if (resolved !== merged) {
+        const old = merged;
+        merged = resolved;
+        old.remove();
+      }
     }
   } catch (e) {
     // Ignore resolveCrossings errors
@@ -151,7 +205,7 @@ export function mergePathsAtPoints(
     if (merged instanceof paper.CompoundPath) {
       mergedPaths.push(...(merged.children.filter(c => c instanceof paper.Path) as paper.Path[]));
     } else {
-      mergedPaths.push(merged);
+      mergedPaths.push(merged as paper.Path);
     }
 
     if (mergedPaths.length > 0) {
@@ -199,7 +253,7 @@ export function mergePathsAtPoints(
     if (merged instanceof paper.CompoundPath) {
       finalChildren.push(...(merged.children.filter(c => c instanceof paper.Path) as paper.Path[]));
     } else {
-      finalChildren.push(merged);
+      finalChildren.push(merged as paper.Path);
     }
 
     if (subPath instanceof paper.CompoundPath && subPath.children.length > 1) {

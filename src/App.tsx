@@ -2,11 +2,12 @@ import React, { useState } from 'react';
 import V1App from './v1/App.tsx';
 import V2App from './v2/App.tsx';
 import V3App from './v3/App.tsx';
+import V3DebugPage from './v3/components/V3DebugPage.tsx';
 import { motion, AnimatePresence } from 'motion/react';
-import { Scissors, Layers, Zap, ChevronRight, Info, Sparkles } from 'lucide-react';
+import { Scissors, Layers, Zap, ChevronRight, Info, Sparkles, Bug } from 'lucide-react';
 
 export default function App() {
-  const [version, setVersion] = useState<'HOME' | 'V1' | 'V2' | 'V3'>('HOME');
+  const [version, setVersion] = useState<'HOME' | 'V1' | 'V2' | 'V3' | 'V3_DEBUG'>('HOME');
 
   if (version === 'V1') {
     return (
@@ -51,6 +52,10 @@ export default function App() {
         <V3App />
       </div>
     );
+  }
+
+  if (version === 'V3_DEBUG') {
+    return <V3DebugPage onBack={() => setVersion('V3')} />;
   }
 
   return (
@@ -102,7 +107,7 @@ export default function App() {
           >
             <div className="flex items-start justify-between mb-6">
               <div className="p-3 bg-white/10 rounded-xl text-white group-hover:bg-indigo-500 transition-colors">
-                <Layers className="w-6 h-6" />
+                <Bug className="w-6 h-6" />
               </div>
               <span className="px-3 py-1 bg-indigo-500/20 text-indigo-300 text-xs font-bold rounded-full uppercase tracking-wider">Experimental</span>
             </div>
@@ -139,9 +144,18 @@ export default function App() {
         </div>
 
         <footer className="pt-12 border-t border-slate-200 flex flex-col md:flex-row items-center justify-between gap-4 text-slate-400 text-sm">
-          <div className="flex items-center gap-2">
-            <Info className="w-4 h-4" />
-            <span>V2 is currently in early development.</span>
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2">
+              <Info className="w-4 h-4" />
+              <span>V2 is currently in early development.</span>
+            </div>
+            <button 
+              onClick={() => setVersion('V3_DEBUG')}
+              className="flex items-center gap-1.5 text-slate-400 hover:text-indigo-600 transition-colors font-medium"
+            >
+              <Bug className="w-4 h-4" />
+              Debugging
+            </button>
           </div>
           <p>© 2026 Jigsaw Studio. All rights reserved.</p>
         </footer>
