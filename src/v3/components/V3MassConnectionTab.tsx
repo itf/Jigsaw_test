@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Label } from './ui/Label';
 import { WhimsyLibrary } from './WhimsyLibrary';
-import { Whimsy } from '../types';
+import { Whimsy, NeckShape } from '../types';
 import { Network, Plus, Zap, ChevronDown, X, Layers, Crop } from 'lucide-react';
 import { RangeSlider } from './controls/RangeSlider';
 
@@ -30,6 +30,8 @@ interface V3MassConnectionTabProps {
   setHeadRotationRange: (val: [number, number]) => void;
   jitterRange: [number, number];
   setJitterRange: (val: [number, number]) => void;
+  massNeckShapes: NeckShape[];
+  setMassNeckShapes: (val: NeckShape[]) => void;
   onAddMassConnectors: (params: {
     pieceIds: string[],
     widthRange: [number, number],
@@ -42,7 +44,8 @@ interface V3MassConnectionTabProps {
     headScaleRelative: boolean,
     useActualAreaForScale: boolean,
     headRotationRange: [number, number],
-    jitterRange: [number, number]
+    jitterRange: [number, number],
+    neckShapes: NeckShape[]
   }) => void;
   onPreviewMassConnectors: (params: {
     pieceIds: string[],
@@ -56,7 +59,8 @@ interface V3MassConnectionTabProps {
     headScaleRelative: boolean,
     useActualAreaForScale: boolean,
     headRotationRange: [number, number],
-    jitterRange: [number, number]
+    jitterRange: [number, number],
+    neckShapes: NeckShape[]
   }) => void;
   onCommitPreviewConnectors: () => void;
   hasPreview: boolean;
@@ -101,6 +105,8 @@ export const V3MassConnectionTab: React.FC<V3MassConnectionTabProps> = ({
   setHeadRotationRange,
   jitterRange,
   setJitterRange,
+  massNeckShapes,
+  setMassNeckShapes,
 }) => {
   const [showHeadLibrary, setShowHeadLibrary] = useState(false);
 
@@ -126,6 +132,7 @@ export const V3MassConnectionTab: React.FC<V3MassConnectionTabProps> = ({
     useActualAreaForScale,
     headRotationRange,
     jitterRange,
+    neckShapes: massNeckShapes,
   });
 
   const handlePreview = () => onPreviewMassConnectors(getParams());
@@ -135,7 +142,7 @@ export const V3MassConnectionTab: React.FC<V3MassConnectionTabProps> = ({
     <div className="flex flex-col gap-4 px-4 py-4 bg-slate-50 border-b border-slate-200">
       {/* Top Row: Selection */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-3 shrink-0 overflow-x-auto no-scrollbar whitespace-nowrap">
           <div className="flex flex-col">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider leading-none">Mass Connect</span>
             <span className="text-[9px] text-slate-500">{selectedIds.length} pieces selected</span>
@@ -192,7 +199,7 @@ export const V3MassConnectionTab: React.FC<V3MassConnectionTabProps> = ({
           </div>
           <RangeSlider
             min={widthRelative ? 0.1 : 5}
-            max={widthRelative ? 0.6 : 100}
+            max={widthRelative ? 0.6 : 500}
             step={widthRelative ? 0.01 : 1}
             value={widthRange}
             onChange={setWidthRange}
@@ -218,7 +225,7 @@ export const V3MassConnectionTab: React.FC<V3MassConnectionTabProps> = ({
           </div>
           <RangeSlider
             min={extrusionRelative ? 0 : 5}
-            max={extrusionRelative ? 100 : 200}
+            max={extrusionRelative ? 100 : 500}
             step={1}
             value={extrusionRange}
             onChange={setExtrusionRange}
@@ -269,7 +276,7 @@ export const V3MassConnectionTab: React.FC<V3MassConnectionTabProps> = ({
           </div>
           <RangeSlider
             min={headScaleRelative ? 1 : 0.1}
-            max={headScaleRelative ? 40 : 5}
+            max={headScaleRelative ? 40 : 20}
             step={headScaleRelative ? 1 : 0.01}
             value={headScaleRange}
             onChange={setHeadScaleRange}
@@ -294,6 +301,34 @@ export const V3MassConnectionTab: React.FC<V3MassConnectionTabProps> = ({
           value={jitterRange}
           onChange={setJitterRange}
         />
+
+        {/* Neck Shapes Selection */}
+        <div className="flex flex-col gap-1">
+          <Label>Neck Shapes</Label>
+          <div className="flex items-center gap-2 flex-wrap">
+            {['STANDARD', 'TAPERED', 'CURVED'].map(shape => (
+              <button
+                key={shape}
+                onClick={() => {
+                  if (massNeckShapes.includes(shape as any)) {
+                    if (massNeckShapes.length > 1) {
+                      setMassNeckShapes(massNeckShapes.filter(s => s !== shape));
+                    }
+                  } else {
+                    setMassNeckShapes([...massNeckShapes, shape as any]);
+                  }
+                }}
+                className={`px-2 py-1 rounded-lg text-[9px] font-bold uppercase transition-all border ${
+                  massNeckShapes.includes(shape as any)
+                    ? 'bg-indigo-600 border-indigo-600 text-white'
+                    : 'bg-white border-slate-200 text-slate-500 hover:border-indigo-300'
+                }`}
+              >
+                {shape}
+              </button>
+            ))}
+          </div>
+        </div>
 
         {/* Heads Selection */}
         <div className="flex flex-col gap-1 relative">

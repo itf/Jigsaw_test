@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo } from 'react';
 import paper from 'paper';
 import { Delaunay } from 'd3-delaunay';
-import { Area, AreaType, Operation, OperationType, PuzzleState, Point, Connector, Whimsy } from '../types';
+import { Area, AreaType, Operation, OperationType, PuzzleState, Point, Connector, Whimsy, NeckShape } from '../types';
 import { resetPaperProject } from '../utils/paperUtils';
 import { generateGridPoints, generateHexGridPoints, generateRandomPoints } from '../utils/gridUtils';
 import { getWhimsyTemplatePathData, WhimsyTemplateId, DEFAULT_WHIMSIES } from '../utils/whimsyGallery';
@@ -66,11 +66,12 @@ type MassConnectorParams = {
   useActualAreaForScale: boolean;
   headRotationRange: [number, number];
   jitterRange: [number, number];
+  neckShapes: NeckShape[];
 };
 
 export function usePuzzleEngineV3(): {
   puzzleState: PuzzleState;
-  createRoot: (w: number, h: number) => void;
+  createRoot: (w: number, h: number, shape?: 'RECT' | 'CIRCLE' | 'HEX') => void;
   subdivideGrid: (params: any) => void;
   mergePieces: (ids: string[]) => void;
   addWhimsy: (params: any) => void;
@@ -85,6 +86,7 @@ export function usePuzzleEngineV3(): {
   resolveConnectorConflicts: () => void;
   validateGrid: () => void;
   cleanPuzzle: () => void;
+  loadState: (state: PuzzleState) => void;
   reset: () => void;
   stamps: ReturnType<typeof useStamps>;
 } {
@@ -97,7 +99,7 @@ export function usePuzzleEngineV3(): {
     DEFAULT_WHIMSIES.map(w => ({
       id: w.id,
       name: w.name,
-      svgData: getWhimsyTemplatePathData(w.id),
+      svgData: getWhimsyTemplatePathData(w.id as WhimsyTemplateId),
       category: w.category
     }))
   );
@@ -124,15 +126,32 @@ export function usePuzzleEngineV3(): {
 
   const stampOps = useStamps(areas, setAreas, connectors, setConnectors, whimsies, width, height);
 
-  const createRoot = useCallback((w: number, h: number) => {
-    console.log('usePuzzleEngineV3: createRoot', w, h);
+  const createRoot = useCallback((w: number, h: number, shape: 'RECT' | 'CIRCLE' | 'HEX' = 'RECT') => {
+    console.log('usePuzzleEngineV3: createRoot', w, h, shape);
     resetPaperProject(w, h);
     const id = 'root';
-    const boundary = new paper.Path.Rectangle({
-      point: [0, 0],
-      size: [w, h],
-      insert: false
-    });
+    
+    let boundary: paper.PathItem;
+    if (shape === 'CIRCLE') {
+      boundary = new paper.Path.Circle({
+        center: [w / 2, h / 2],
+        radius: Math.min(w, h) / 2,
+        insert: false
+      });
+    } else if (shape === 'HEX') {
+      boundary = new paper.Path.RegularPolygon({
+        center: [w / 2, h / 2],
+        sides: 6,
+        radius: Math.min(w, h) / 2,
+        insert: false
+      });
+    } else {
+      boundary = new paper.Path.Rectangle({
+        point: [0, 0],
+        size: [w, h],
+        insert: false
+      });
+    }
 
     const newAreas: Record<string, Area> = {
       [id]: {
@@ -372,18 +391,68 @@ export function usePuzzleEngineV3(): {
 
       let nextAreas = { ...prev };
 
-      Object.keys(nextAreas).forEach(id => {
-        const area = nextAreas[id];
-        if (area.type === AreaType.PIECE) {
-          const piecePath = area.boundary.clone();
-          if (piecePath.intersects(whimsyPath) || piecePath.contains(whimsyPath.bounds.center)) {
-            const subtracted = piecePath.subtract(whimsyPath);
-            subtracted.remove();
-            nextAreas[id] = { ...area, boundary: subtracted };
-          }
-          piecePath.remove();
+      // 1. Prepare the whimsy geometry
+      let filledPath: paper.PathItem = whimsyPath.clone();
+      if (filledPath instanceof paper.CompoundPath) {
+        const filled = (filledPath as paper.CompoundPath).children.reduce((acc, child) => {
+          const pathChild = child as paper.PathItem;
+          if (!acc) return pathChild.clone();
+          return (acc as paper.PathItem).unite(pathChild);
+        }, null as paper.PathItem | null) as paper.PathItem | null;
+        if (filled) {
+          filledPath.remove();
+          filledPath = filled;
         }
+      }
+      
+      const holePath = filledPath.subtract(whimsyPath);
+
+      // 2. Process existing pieces
+      const pieceIds = Object.keys(nextAreas).filter(id => nextAreas[id].type === AreaType.PIECE);
+      
+      pieceIds.forEach(id => {
+        const area = nextAreas[id];
+        const piecePath = area.boundary.clone();
+        
+        // Check if whimsy affects this piece
+        if (piecePath.intersects(filledPath) || piecePath.contains(filledPath.bounds.center) || filledPath.contains(piecePath.bounds.center)) {
+          const outside = piecePath.subtract(filledPath);
+          const inside = piecePath.intersect(holePath);
+          
+          if (outside.isEmpty()) {
+            delete nextAreas[id];
+          } else {
+            nextAreas[id] = { ...area, boundary: outside };
+          }
+          
+          if (!inside.isEmpty()) {
+            const holePieceId = `hole-${id}-${Math.random().toString(36).slice(2, 6)}`;
+            nextAreas[holePieceId] = {
+              ...area, // Inherit group memberships
+              id: holePieceId,
+              boundary: inside,
+              color: area.color, 
+              seedPoint: inside.bounds.center
+            };
+
+            // Update parent groups to include the new hole piece
+            area.groupMemberships.forEach(groupId => {
+              if (nextAreas[groupId]) {
+                nextAreas[groupId] = {
+                  ...nextAreas[groupId],
+                  children: [...nextAreas[groupId].children, holePieceId]
+                };
+              }
+            });
+          } else {
+            inside.remove();
+          }
+        }
+        piecePath.remove();
       });
+
+      filledPath.remove();
+      holePath.remove();
 
       const whimsyId = `whimsy-${Math.random().toString(36).slice(2, 6)}`;
       whimsyPath.remove();
@@ -444,6 +513,30 @@ export function usePuzzleEngineV3(): {
     setAreas(prev => validateAndCleanState(prev));
   }, []);
 
+  const loadState = useCallback((state: PuzzleState) => {
+    setAreas(state.areas);
+    setConnectors(state.connectors);
+    
+    // Merge persisted whimsies with default ones to ensure new templates are available
+    setWhimsies(prev => {
+      const defaultWhimsies = DEFAULT_WHIMSIES.map(w => ({
+        id: w.id,
+        name: w.name,
+        svgData: getWhimsyTemplatePathData(w.id as WhimsyTemplateId),
+        category: w.category
+      }));
+      
+      const existingIds = new Set<string>(defaultWhimsies.map(w => w.id));
+      const persistedWhimsies = state.whimsies.filter(w => !existingIds.has(w.id));
+      
+      return [...defaultWhimsies, ...persistedWhimsies];
+    });
+    
+    setRootAreaId(state.rootAreaId);
+    setWidth(state.width);
+    setHeight(state.height);
+  }, []);
+
   const addConnector = useCallback((connector: Omit<Connector, 'id'>) => {
     const id = `connector-${Math.random().toString(36).slice(2, 6)}`;
     setConnectors(prev => ({
@@ -499,7 +592,8 @@ export function usePuzzleEngineV3(): {
       headScaleRelative,
       useActualAreaForScale,
       headRotationRange,
-      jitterRange
+      jitterRange,
+      neckShapes
     } = params;
 
     const generated: Record<string, Connector> = {};
@@ -546,8 +640,9 @@ export function usePuzzleEngineV3(): {
 
             // Calculate shared boundary length if needed
             let sharedLen = 0;
-            if (widthRelative || true) { 
-              sharedLen = path.length * (seg.tEnd - seg.tStart);
+            if (widthRelative) { 
+              // Relative width is now based on 1/4 of the piece's boundary length
+              sharedLen = path.length / 4;
             }
 
             // Position (0 to 1 range, 0.5 is middle)
@@ -556,6 +651,7 @@ export function usePuzzleEngineV3(): {
             midT = ((midT % 1) + 1) % 1;
 
             const headTemplateId = headTemplateIds[Math.floor(Math.random() * headTemplateIds.length)];
+            const neckShape = neckShapes[Math.floor(Math.random() * neckShapes.length)];
             const connectorId = `connector-${Math.random().toString(36).slice(2, 6)}`;
 
             // Width
@@ -614,7 +710,8 @@ export function usePuzzleEngineV3(): {
               headRotationDeg: rand(headRotationRange),
               jitter: finalJitter,
               jitterSeed: (Math.random() * 0xffffffff) >>> 0,
-              useEquidistantHeadPoint: true
+              useEquidistantHeadPoint: true,
+              neckShape
             };
           });
         });
@@ -716,6 +813,7 @@ export function usePuzzleEngineV3(): {
     resolveConnectorConflicts,
     validateGrid,
     cleanPuzzle,
+    loadState,
     reset: () => { setAreas({}); setConnectors({}); setRootAreaId(null); },
     stamps: stampOps
   };

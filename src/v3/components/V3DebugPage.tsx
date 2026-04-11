@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import paper from 'paper';
 import { mergePathsAtPoints } from '../utils/pathMergeUtils';
 import { generateConnectorPath } from '../utils/connectorUtils';
+import { getDisconnectedComponents } from '../utils/puzzleValidation';
+import { getWhimsyTemplatePathData } from '../utils/whimsyGallery';
 import { NeckShape } from '../types';
 import { ChevronLeft, Bug, Info, RefreshCw } from 'lucide-react';
 
@@ -31,6 +33,16 @@ export default function V3DebugPage({ onBack }: { onBack: () => void }) {
     pathIndex: 1,
     shape: 'donut' as 'square' | 'circle' | 'donut' | 'square-hole' | 'square-2-holes',
     headType: 'square' as 'square' | 'circle' | 'star' | 'triangle',
+  });
+
+  const [selectionDebug, setSelectionDebug] = useState({
+    overlayOpacity: 0.4,
+    strokeWidth: 5,
+    glowIntensity: 8,
+    dashLength: 8,
+    blueColor: '#312e81',
+    purpleColor: '#581c87',
+    overlayColor: 'rgba(30, 27, 75, 0.4)'
   });
 
   const [liveResult, setLiveResult] = useState<{ pathData: string; originalMain: string; originalSub: string; p1: [number, number]; p2: [number, number]; wasClockwise: boolean } | null>(null);
@@ -569,6 +581,241 @@ export default function V3DebugPage({ onBack }: { onBack: () => void }) {
             </div>
             <div className="text-[10px] font-mono text-slate-400 break-all max-h-24 overflow-y-auto">
               {liveResult?.pathData || 'No result'}
+            </div>
+          </div>
+        </section>
+        
+        {/* Selection Visuals Debug Section */}
+        <section className="bg-white rounded-3xl shadow-2xl shadow-slate-200 border border-slate-100 overflow-hidden">
+          <div className="p-6 border-b border-slate-100 bg-slate-50/50">
+            <h2 className="text-xl font-bold text-slate-800">Selection Visuals Debug</h2>
+            <p className="text-sm text-slate-500">Test and refine the selection appearance.</p>
+          </div>
+          
+          <div className="grid lg:grid-cols-3 gap-0">
+            <div className="p-8 space-y-6 border-r border-slate-100">
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Overlay Opacity</label>
+                  <span className="text-xs font-mono text-indigo-600">{selectionDebug.overlayOpacity}</span>
+                </div>
+                <input 
+                  type="range" min="0" max="1" step="0.05" 
+                  value={selectionDebug.overlayOpacity}
+                  onChange={e => setSelectionDebug(p => ({ ...p, overlayOpacity: parseFloat(e.target.value) }))}
+                  className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                />
+              </div>
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Stroke Width</label>
+                  <span className="text-xs font-mono text-indigo-600">{selectionDebug.strokeWidth}px</span>
+                </div>
+                <input 
+                  type="range" min="1" max="10" step="1" 
+                  value={selectionDebug.strokeWidth}
+                  onChange={e => setSelectionDebug(p => ({ ...p, strokeWidth: parseInt(e.target.value) }))}
+                  className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                />
+              </div>
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Glow Intensity</label>
+                  <span className="text-xs font-mono text-indigo-600">{selectionDebug.glowIntensity}</span>
+                </div>
+                <input 
+                  type="range" min="0" max="20" step="1" 
+                  value={selectionDebug.glowIntensity}
+                  onChange={e => setSelectionDebug(p => ({ ...p, glowIntensity: parseInt(e.target.value) }))}
+                  className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                />
+              </div>
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Dash Length</label>
+                  <span className="text-xs font-mono text-indigo-600">{selectionDebug.dashLength}</span>
+                </div>
+                <input 
+                  type="range" min="2" max="20" step="1" 
+                  value={selectionDebug.dashLength}
+                  onChange={e => setSelectionDebug(p => ({ ...p, dashLength: parseInt(e.target.value) }))}
+                  className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                />
+              </div>
+            </div>
+            
+            <div className="lg:col-span-2 bg-slate-50/50 p-8 flex items-center justify-center">
+              <div className="w-full max-w-md aspect-square bg-white rounded-2xl shadow-inner border border-slate-100 relative p-8">
+                <svg viewBox="0 0 200 200" className="w-full h-full">
+                  <defs>
+                    <filter id="debug-selection-glow" x="-40%" y="-40%" width="180%" height="180%">
+                      <feGaussianBlur in="SourceAlpha" stdDeviation={selectionDebug.glowIntensity} />
+                      <feFlood floodColor="#4f46e5" floodOpacity="0.6" />
+                      <feComposite operator="in" in2="SourceAlpha" />
+                      <feMerge>
+                        <feMergeNode />
+                        <feMergeNode in="SourceGraphic" />
+                      </feMerge>
+                    </filter>
+                    <filter id="debug-inner-shadow">
+                      <feComponentTransfer in="SourceAlpha">
+                        <feFuncA type="table" tableValues="1 0" />
+                      </feComponentTransfer>
+                      <feGaussianBlur stdDeviation="3" />
+                      <feOffset dx="0" dy="0" result="offsetblur" />
+                      <feFlood floodColor="black" floodOpacity="0.5" result="color" />
+                      <feComposite in2="offsetblur" operator="in" />
+                      <feComposite in2="SourceAlpha" operator="in" />
+                      <feMerge>
+                        <feMergeNode in="SourceGraphic" />
+                        <feMergeNode />
+                      </feMerge>
+                    </filter>
+                  </defs>
+                  
+                  {/* Sample Piece */}
+                  <path
+                    d="M 50 50 L 150 50 L 150 150 L 50 150 Z"
+                    fill="#e2e8f0"
+                    stroke="#1e1b4b"
+                    strokeWidth={selectionDebug.strokeWidth}
+                    strokeLinejoin="round"
+                    filter="url(#debug-selection-glow)"
+                  />
+                  
+                  {/* Overlay */}
+                  <path
+                    d="M 50 50 L 150 50 L 150 150 L 50 150 Z"
+                    fill={`rgba(30, 27, 75, ${selectionDebug.overlayOpacity})`}
+                    filter="url(#debug-inner-shadow)"
+                  />
+                  
+                  {/* Dashes */}
+                  <path
+                    d="M 50 50 L 150 50 L 150 150 L 50 150 Z"
+                    fill="none"
+                    stroke={selectionDebug.blueColor}
+                    strokeWidth={selectionDebug.strokeWidth * 0.6}
+                    strokeDasharray={`${selectionDebug.dashLength} ${selectionDebug.dashLength}`}
+                  />
+                  <path
+                    d="M 50 50 L 150 50 L 150 150 L 50 150 Z"
+                    fill="none"
+                    stroke={selectionDebug.purpleColor}
+                    strokeWidth={selectionDebug.strokeWidth * 0.6}
+                    strokeDasharray={`${selectionDebug.dashLength} ${selectionDebug.dashLength}`}
+                    strokeDashoffset={selectionDebug.dashLength}
+                  />
+                </svg>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Whimsy Insertion Test Section */}
+        <section className="bg-white rounded-3xl shadow-2xl shadow-slate-200 border border-slate-100 overflow-hidden">
+          <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-bold text-slate-800">Whimsy Insertion Test</h2>
+              <p className="text-sm text-slate-500">Test how whimsies (especially donuts) are inserted and split.</p>
+            </div>
+            <div className="flex gap-2">
+              {(['donut', 'fish', 'bone', 'snowman', 'hexagon', 'spiral'] as const).map(t => (
+                <button
+                  key={t}
+                  onClick={() => setLiveParams(p => ({ ...p, headType: t as any }))}
+                  className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider transition-all ${liveParams.headType === t ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' : 'bg-white text-slate-500 hover:bg-slate-100'}`}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+          </div>
+          
+          <div className="p-8 flex flex-col items-center gap-6">
+            <div className="w-full max-w-2xl aspect-video bg-slate-50 rounded-2xl border border-slate-200 relative overflow-hidden flex items-center justify-center">
+              <svg viewBox="0 0 400 225" className="w-full h-full">
+                <defs>
+                  <pattern id="grid-debug" width="20" height="20" patternUnits="userSpaceOnUse">
+                    <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#e2e8f0" strokeWidth="0.5"/>
+                  </pattern>
+                </defs>
+                <rect width="400" height="225" fill="url(#grid-debug)" />
+                
+                {/* We'll simulate the insertion here */}
+                {(() => {
+                  const templateId = liveParams.headType as any;
+                  const stem = getWhimsyTemplatePathData(templateId);
+                  
+                  // Create a mock piece (a large rectangle)
+                  const pieceRect = new paper.Path.Rectangle({
+                    point: [50, 25],
+                    size: [300, 175],
+                    insert: false
+                  });
+                  
+                  const whimsyPath = new paper.CompoundPath({
+                    pathData: stem,
+                    insert: false
+                  });
+                  whimsyPath.scale(60, new paper.Point(0, 0));
+                  const wb = whimsyPath.bounds;
+                  whimsyPath.translate(new paper.Point(
+                    200 - (wb.x + wb.width / 2),
+                    112.5 - (wb.y + wb.height / 2)
+                  ));
+                  
+                  // Perform subtraction
+                  const subtracted = pieceRect.subtract(whimsyPath);
+                  
+                  // Get components of the subtracted piece
+                  const components = getDisconnectedComponents(subtracted);
+                  
+                  // Get components of the whimsy itself
+                  const whimsyComponents = getDisconnectedComponents(whimsyPath);
+                  
+                  const result = (
+                    <g>
+                      {/* Subtracted Piece */}
+                      {components.map((comp, i) => (
+                        <path 
+                          key={`piece-${i}`}
+                          d={comp.pathData}
+                          fill="#f1f5f9"
+                          stroke="#94a3b8"
+                          strokeWidth="1"
+                          fillRule="evenodd"
+                        />
+                      ))}
+                      
+                      {/* Whimsy Piece */}
+                      {whimsyComponents.map((comp, i) => (
+                        <path 
+                          key={`whimsy-${i}`}
+                          d={comp.pathData}
+                          fill="#6366f1"
+                          fillOpacity="0.2"
+                          stroke="#4f46e5"
+                          strokeWidth="2"
+                          fillRule="evenodd"
+                        />
+                      ))}
+                    </g>
+                  );
+                  
+                  pieceRect.remove();
+                  whimsyPath.remove();
+                  subtracted.remove();
+                  components.forEach(c => c.remove());
+                  whimsyComponents.forEach(c => c.remove());
+                  
+                  return result;
+                })()}
+              </svg>
+            </div>
+            <div className="text-sm text-slate-500 max-w-xl text-center">
+              This visualization shows the result of <code>piece.subtract(whimsy)</code> and then <code>getDisconnectedComponents()</code>. 
+              If the donut hole is preserved, you should see the center of the donut as empty space (the background grid).
             </div>
           </div>
         </section>

@@ -6,6 +6,7 @@ import { V3ActionBar } from './components/V3ActionBar';
 import { V3Canvas } from './components/V3Canvas';
 import { V3ProductionTab } from './components/V3ProductionTab';
 import { V3CreateModal } from './components/V3CreateModal';
+import { usePersistence } from './hooks/usePersistence';
 import { Tab } from '../v2/constants';
 import { Point, AreaType, Connector, NeckShape } from './types';
 import { getPathCount, getClosestLocationOnBoundary } from './utils/paperUtils';
@@ -14,7 +15,7 @@ import paper from 'paper';
 export default function V3App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState<Tab>('TOPOLOGY');
-  const [showCreateModal, setShowCreateModal] = useState(true);
+  const [showCreateModal, setShowCreateModal] = useState(false);
   const [containerSize, setContainerSize] = useState({ w: window.innerWidth, h: window.innerHeight - 168 });
   
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -59,8 +60,8 @@ export default function V3App() {
   const [massHeadIds, setMassHeadIds] = useState<string[]>(['circle']);
 
   // Mass Connection Parameters (Persistent)
-  const [massWidthRange, setMassWidthRange] = useState<[number, number]>([12, 20]);
-  const [massWidthRelative, setMassWidthRelative] = useState(false);
+  const [massWidthRange, setMassWidthRange] = useState<[number, number]>([0.15, 0.25]);
+  const [massWidthRelative, setMassWidthRelative] = useState(true);
   const [massExtrusionRange, setMassExtrusionRange] = useState<[number, number]>([15, 25]);
   const [massExtrusionRelative, setMassExtrusionRelative] = useState(true);
   const [massPositionRange, setMassPositionRange] = useState<[number, number]>([45, 55]);
@@ -69,6 +70,7 @@ export default function V3App() {
   const [massUseActualAreaForScale, setMassUseActualAreaForScale] = useState(false);
   const [massHeadRotationRange, setMassHeadRotationRange] = useState<[number, number]>([0, 0]);
   const [massJitterRange, setMassJitterRange] = useState<[number, number]>([0, 2]);
+  const [massNeckShapes, setMassNeckShapes] = useState<NeckShape[]>([NeckShape.STANDARD]);
 
   // Preview state
   const [previewConnectors, setPreviewConnectors] = useState<Record<string, Connector>>({});
@@ -94,10 +96,20 @@ export default function V3App() {
     validateGrid,
     cleanPuzzle,
     reset,
+    loadState,
     stamps: stampOps
   } = usePuzzleEngineV3();
 
+  const { isReady, exportToFile, importFromFile, clearPersistence } = usePersistence(puzzleState, loadState);
+
   const { areas, connectors, whimsies, width, height } = puzzleState;
+
+  // Show modal only if no puzzle is loaded after persistence check
+  useEffect(() => {
+    if (isReady && !puzzleState.rootAreaId) {
+      setShowCreateModal(true);
+    }
+  }, [isReady, puzzleState.rootAreaId]);
 
   // Sync connection parameters when a connector is selected
   useEffect(() => {
@@ -157,10 +169,10 @@ export default function V3App() {
     return () => observer.disconnect();
   }, []);
 
-  const handleCreate = useCallback((w: number, h: number) => {
-    console.log('Initializing V3 Engine with:', w, h);
+  const handleCreate = useCallback((shape: 'RECT' | 'CIRCLE' | 'HEX') => {
+    console.log('Initializing V3 Engine with shape:', shape);
     try {
-      createRoot(w, h);
+      createRoot(2000, 2000, shape);
       setShowCreateModal(false);
     } catch (err) {
       console.error('Failed to initialize V3 Engine:', err);
@@ -349,7 +361,7 @@ export default function V3App() {
     setActiveTab(tab);
   }, []);
 
-  const fitScale = Math.max(0.1, Math.min(containerSize.w / (width || 800), containerSize.h / (height || 600)) * 0.9);
+  const fitScale = Math.max(0.1, Math.min(containerSize.w / (width || 800), (containerSize.h - 60) / (height || 600)) * 0.9);
 
   return (
     <div className="flex flex-col min-h-screen bg-slate-50 overflow-y-auto font-sans selection:bg-indigo-100">
@@ -357,7 +369,15 @@ export default function V3App() {
         <V3CreateModal onCreate={handleCreate} />
       )}
 
-      <V3Header onReset={() => { reset(); setShowCreateModal(true); }} />
+      <V3Header 
+        onReset={() => { 
+          clearPersistence();
+          reset(); 
+          setShowCreateModal(true); 
+        }} 
+        onSave={exportToFile}
+        onLoad={importFromFile}
+      />
 
       <V3Navigation activeTab={activeTab} setActiveTab={handleSetActiveTab} />
 
@@ -456,6 +476,8 @@ export default function V3App() {
         setMassHeadRotationRange={setMassHeadRotationRange}
         massJitterRange={massJitterRange}
         setMassJitterRange={setMassJitterRange}
+        massNeckShapes={massNeckShapes}
+        setMassNeckShapes={setMassNeckShapes}
         areas={areas}
         onCreateStamp={stampOps.createStamp}
         onPlaceStamp={(sourceGroupId) => {

@@ -41,8 +41,18 @@ export function processProductionState(puzzleState: PuzzleState, options: Proces
   const pieceColors: Record<string, string> = {};
   const originalPiecePaths: Record<string, paper.PathItem> = {};
 
+  /* 
+     TODO: Data Scaling Implementation
+     Before performing boolean operations, we should upscale all paths and coordinates 
+     (e.g., by a factor of 2.5 to reach a 2000x2000 coordinate space).
+     This increases numerical precision for Paper.js boolean operations, 
+     reducing errors like "Zero-length paths" or missing intersections.
+     After processing, we can either scale back down for display or keep the 
+     upscaled version for high-resolution SVG export.
+  */
+
   Object.values(areas).forEach(area => {
-    if (area.type === AreaType.PIECE) {
+    if (area.type === AreaType.PIECE || (area.type === AreaType.STAMP && area.children.length === 0)) {
       // Clone the existing boundary directly to preserve CompoundPath structure and holes
       const path = area.boundary.clone({ insert: false });
       piecePaths[area.id] = path;
@@ -62,7 +72,7 @@ export function processProductionState(puzzleState: PuzzleState, options: Proces
   }
 
   // 1c. Subtract STAMP instance boundaries from overlapping non-stamp pieces
-  subtractStampsFromPieces(piecePaths, areas);
+  subtractStampsFromPieces(piecePaths, areas, flattenCurves ? flattenTolerance : undefined);
 
   const pieceIds = Object.keys(piecePaths);
   const allConnectors = Object.values(connectors).filter(c => !c.disabled);

@@ -100,6 +100,8 @@ interface V3ActionBarProps {
   setMassHeadRotationRange: (val: [number, number]) => void;
   massJitterRange: [number, number];
   setMassJitterRange: (val: [number, number]) => void;
+  massNeckShapes: NeckShape[];
+  setMassNeckShapes: (val: NeckShape[]) => void;
   // Stamp props
   areas: Record<string, Area>;
   onCreateStamp: (name: string, pieceIds: string[], includeNonAdjacentConnectors: boolean) => void;
@@ -214,6 +216,8 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
   setMassHeadRotationRange,
   massJitterRange,
   setMassJitterRange,
+  massNeckShapes,
+  setMassNeckShapes,
   areas,
   onCreateStamp,
   onPlaceStamp,
@@ -234,7 +238,7 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
       <div className="flex items-center gap-3 px-4 py-2 flex-wrap">
         {activeTab === 'TOPOLOGY' && (
           <>
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-2">
               <Label>Split</Label>
               <select
                 value={splitPattern}
@@ -292,7 +296,7 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
               type="button"
               onClick={onSubdivide}
               disabled={!canSubdivide}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-all shrink-0 disabled:opacity-30 disabled:cursor-not-allowed bg-slate-900 text-white hover:bg-slate-800"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed bg-slate-900 text-white hover:bg-slate-800"
             >
               {splitPattern === 'GRID' && <Grid className="w-3 h-3" />}
               {splitPattern === 'HEX' && <Hexagon className="w-3 h-3" />}
@@ -303,7 +307,7 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
             <button
               type="button"
               onClick={onValidateGrid}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-all shrink-0 bg-slate-100 text-slate-700 hover:bg-slate-200"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-all bg-slate-100 text-slate-700 hover:bg-slate-200"
             >
               <RefreshCw className="w-3 h-3" />
               <span className="text-[10px] font-bold uppercase">Validate</span>
@@ -312,42 +316,57 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
             <button
               type="button"
               onClick={onCleanPuzzle}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-all shrink-0 bg-slate-100 text-slate-700 hover:bg-slate-200"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-all bg-slate-100 text-slate-700 hover:bg-slate-200"
             >
               <RefreshCw className="w-3 h-3" />
               <span className="text-[10px] font-bold uppercase">Clean</span>
             </button>
 
             <Divider />
-            <button
-              type="button"
-              onClick={onSelectAll}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-all shrink-0 bg-slate-100 text-slate-700 hover:bg-slate-200"
-            >
-              <Layers className="w-3 h-3" />
-              <span className="text-[10px] font-bold uppercase">All</span>
-            </button>
-            <button
-              type="button"
-              onClick={onUnselectAll}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-all shrink-0 bg-slate-100 text-slate-700 hover:bg-slate-200"
-            >
-              <X className="w-3 h-3" />
-              <span className="text-[10px] font-bold uppercase">None</span>
-            </button>
-            <button
-              type="button"
-              onClick={onToggleRectSelect}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-all shrink-0 ${rectSelectMode ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
-            >
-              <Crop className="w-3 h-3" />
-              <span className="text-[10px] font-bold uppercase">Rect</span>
-            </button>
+            <div className="flex items-center gap-1 bg-slate-100 rounded-lg px-1 py-0.5">
+              <button
+                type="button"
+                onClick={onSelectAll}
+                className="flex items-center gap-1.5 px-2 py-1 rounded-md transition-all hover:bg-white hover:shadow-sm text-slate-700"
+                title="Select All"
+              >
+                <Layers className="w-3 h-3" />
+                <span className="text-[10px] font-bold uppercase">All</span>
+              </button>
+              <button
+                type="button"
+                onClick={onUnselectAll}
+                className="flex items-center gap-1.5 px-2 py-1 rounded-md transition-all hover:bg-white hover:shadow-sm text-slate-700"
+                title="Unselect All"
+              >
+                <X className="w-3 h-3" />
+                <span className="text-[10px] font-bold uppercase">None</span>
+              </button>
+              <button
+                type="button"
+                onClick={onToggleRectSelect}
+                className={`flex items-center gap-1.5 px-2 py-1 rounded-md transition-all ${rectSelectMode ? 'bg-indigo-600 text-white shadow-sm' : 'hover:bg-white hover:shadow-sm text-slate-700'}`}
+                title="Rectangle Select"
+              >
+                <Crop className="w-3 h-3" />
+                <span className="text-[10px] font-bold uppercase">Rect</span>
+              </button>
+              
+              {selectedIds.length > 0 && (
+                <>
+                  <div className="w-px h-3 bg-slate-200 mx-0.5" />
+                  <div className="px-2 py-1 bg-indigo-50 text-indigo-600 rounded-md flex items-center gap-1.5">
+                    <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
+                    <span className="text-[10px] font-black">{selectedIds.length}</span>
+                  </div>
+                </>
+              )}
+            </div>
 
             <Divider />
 
-            <div className="flex items-center gap-4 flex-wrap shrink-0">
-              <div className="flex items-center gap-2">
+            <div className="flex items-center gap-4 flex-wrap">
+              <div className="flex items-center gap-2 relative">
                 <Label>Whimsy</Label>
                 <button
                   type="button"
@@ -367,6 +386,22 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
                   </div>
                   <span className="truncate max-w-[80px]">{currentWhimsy?.name || 'Library'}</span>
                 </button>
+
+                {showWhimsyLibrary && libraryMode === 'WHIMSY' && (
+                  <div className="absolute top-full left-0 mt-2 w-72 h-96 z-50 shadow-2xl">
+                    <WhimsyLibrary 
+                      whimsies={whimsies}
+                      selectedId={whimsyTemplate}
+                      onSelect={(w) => {
+                        setWhimsyTemplate(w.id);
+                        startWhimsyPlacement();
+                        setShowWhimsyLibrary(false);
+                      }}
+                      onUpload={onUploadWhimsy}
+                      onRemove={onRemoveWhimsy}
+                    />
+                  </div>
+                )}
               </div>
 
               <InfiniteSlider 
@@ -396,20 +431,20 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
                 <button
                   type="button"
                   onClick={startWhimsyPlacement}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg shrink-0 bg-violet-600 text-white text-[10px] font-bold uppercase hover:bg-violet-500"
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-violet-600 text-white text-[10px] font-bold uppercase hover:bg-violet-500"
                 >
                   <Sparkles className="w-3 h-3 opacity-90" />
                   Add whimsy
                 </button>
               ) : (
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-2">
                   <span className="text-[9px] text-violet-700 font-semibold max-w-[140px] leading-tight">
                     Move over puzzle · click to place · Esc
                   </span>
                   <button
                     type="button"
                     onClick={cancelWhimsyPlacement}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg shrink-0 bg-slate-200 text-slate-800 text-[10px] font-bold uppercase hover:bg-slate-300"
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-200 text-slate-800 text-[10px] font-bold uppercase hover:bg-slate-300"
                   >
                     Cancel
                   </button>
@@ -424,7 +459,7 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
                 type="button"
                 onClick={onMerge}
                 disabled={selectedIds.length < 2}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg shrink-0 bg-amber-600 text-white text-[10px] font-bold uppercase disabled:opacity-30 disabled:cursor-not-allowed hover:bg-amber-500"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-600 text-white text-[10px] font-bold uppercase disabled:opacity-30 disabled:cursor-not-allowed hover:bg-amber-500"
               >
                 <Merge className="w-3 h-3" />
                 Merge
@@ -442,23 +477,38 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
 
             <Divider />
 
-            <button
-              onClick={() => setShowStampPanel(prev => !prev)}
-              className={`flex items-center gap-1.5 h-7 px-3 rounded-lg text-[10px] font-bold transition-colors ${
-                showStampPanel
-                  ? 'bg-violet-600 text-white'
-                  : 'bg-violet-50 text-violet-600 hover:bg-violet-100'
-              }`}
-            >
-              <Copy className="w-3 h-3" />
-              Stamps ({(Object.values(areas) as Area[]).filter(a => a.stampName).length})
-            </button>
+            <div className="relative">
+              <button
+                onClick={() => setShowStampPanel(prev => !prev)}
+                className={`flex items-center gap-1.5 h-7 px-3 rounded-lg text-[10px] font-bold transition-colors ${
+                  showStampPanel
+                    ? 'bg-violet-600 text-white'
+                    : 'bg-violet-50 text-violet-600 hover:bg-violet-100'
+                }`}
+              >
+                <Copy className="w-3 h-3" />
+                Stamps ({(Object.values(areas) as Area[]).filter(a => a.stampName).length})
+              </button>
+
+              {showStampPanel && activeTab === 'MODIFICATION' && (
+                <div className="absolute top-full left-0 mt-2 z-50 shadow-2xl">
+                  <StampPanel
+                    areas={areas}
+                    selectedIds={selectedIds}
+                    onCreateStamp={onCreateStamp}
+                    onPlaceStamp={onPlaceStamp}
+                    onDeleteStampSource={onDeleteStampSource}
+                    onRefreshStamps={onRefreshStamps}
+                  />
+                </div>
+              )}
+            </div>
           </>
         )}
 
         {activeTab === 'CONNECTION' && (
           <div className="flex items-center gap-4 flex-wrap">
-            <div className="flex items-center gap-2 px-3 py-1.5 text-emerald-600 bg-emerald-50 rounded-xl shrink-0">
+            <div className="flex items-center gap-2 px-3 py-1.5 text-emerald-600 bg-emerald-50 rounded-xl">
               <LinkIcon className="w-3.5 h-3.5" />
               <span className="text-xs font-bold uppercase tracking-tight">Connectors</span>
             </div>
@@ -484,7 +534,7 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
               value={connectorWidthPx} 
               onChange={setConnectorWidthPx} 
               min={4} 
-              max={200} 
+              max={500} 
               unit="px"
               width="w-24" 
             />
@@ -494,12 +544,12 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
               value={connectorExtrusion} 
               onChange={setConnectorExtrusion} 
               min={1} 
-              max={200} 
+              max={500} 
               width="w-24" 
               unit="px"
             />
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 relative">
               <Label>Head</Label>
               <button
                 type="button"
@@ -519,6 +569,21 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
                 </div>
                 <span className="truncate max-w-[80px]">{currentConnectorHead?.name || 'Library'}</span>
               </button>
+
+              {showWhimsyLibrary && libraryMode === 'CONNECTOR' && (
+                <div className="absolute top-full left-0 mt-2 w-72 h-96 z-50 shadow-2xl">
+                  <WhimsyLibrary 
+                    whimsies={whimsies}
+                    selectedId={connectorHeadTemplate}
+                    onSelect={(w) => {
+                      setConnectorHeadTemplate(w.id);
+                      setShowWhimsyLibrary(false);
+                    }}
+                    onUpload={onUploadWhimsy}
+                    onRemove={onRemoveWhimsy}
+                  />
+                </div>
+              )}
             </div>
 
             <InfiniteSlider 
@@ -526,7 +591,7 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
               value={connectorHeadScale} 
               onChange={setConnectorHeadScale} 
               min={0.1} 
-              max={5} 
+              max={20} 
               step={0.1}
               width="w-24" 
               sensitivity={0.05}
@@ -639,7 +704,7 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
               type="button"
               onClick={onAddConnector}
               disabled={selectedIds.length !== 1 || !!selectedConnectorId}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg shrink-0 bg-emerald-600 text-white text-[10px] font-bold uppercase disabled:opacity-30 disabled:cursor-not-allowed hover:bg-emerald-500"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-[10px] font-bold uppercase disabled:opacity-30 disabled:cursor-not-allowed hover:bg-emerald-500"
             >
               <Plus className="w-3 h-3" />
               Add
@@ -649,7 +714,7 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
               <button
                 type="button"
                 onClick={() => onRemoveConnector(selectedConnectorId)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg shrink-0 bg-rose-600 text-white text-[10px] font-bold uppercase hover:bg-rose-500"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 text-white text-[10px] font-bold uppercase hover:bg-rose-500"
               >
                 <Trash2 className="w-3 h-3" />
                 Delete
@@ -666,40 +731,7 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
         )}
       </div>
 
-      {/* Whimsy Library Popover */}
-      {showWhimsyLibrary && (
-        <div className="absolute top-full left-4 mt-2 w-72 h-96 z-50 shadow-2xl">
-          <WhimsyLibrary 
-            whimsies={whimsies}
-            selectedId={libraryMode === 'WHIMSY' ? whimsyTemplate : connectorHeadTemplate}
-            onSelect={(w) => {
-              if (libraryMode === 'WHIMSY') {
-                setWhimsyTemplate(w.id);
-                startWhimsyPlacement();
-              } else {
-                setConnectorHeadTemplate(w.id);
-              }
-              setShowWhimsyLibrary(false);
-            }}
-            onUpload={onUploadWhimsy}
-            onRemove={onRemoveWhimsy}
-          />
-        </div>
-      )}
-
-      {/* Stamp Panel Popover */}
-      {showStampPanel && activeTab === 'MODIFICATION' && (
-        <div className="absolute top-full left-4 mt-2 z-50 shadow-2xl">
-          <StampPanel
-            areas={areas}
-            selectedIds={selectedIds}
-            onCreateStamp={onCreateStamp}
-            onPlaceStamp={onPlaceStamp}
-            onDeleteStampSource={onDeleteStampSource}
-            onRefreshStamps={onRefreshStamps}
-          />
-        </div>
-      )}
+      {/* Stamp Panel Popover removed from here, moved to local buttons */}
 
       {activeTab === 'MASS_CONNECTION' && (
         <V3MassConnectionTab
@@ -727,6 +759,8 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
           setHeadRotationRange={setMassHeadRotationRange}
           jitterRange={massJitterRange}
           setJitterRange={setMassJitterRange}
+          massNeckShapes={massNeckShapes}
+          setMassNeckShapes={setMassNeckShapes}
           onAddMassConnectors={onAddMassConnectors}
           onPreviewMassConnectors={onPreviewMassConnectors}
           onCommitPreviewConnectors={onCommitPreviewConnectors}
@@ -739,26 +773,7 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
         />
       )}
 
-      {selectedIds.length > 0 && (
-        <div className="flex items-center gap-3 px-4 py-2 border-t border-slate-100 bg-slate-50 flex-wrap">
-          <div className="flex items-center gap-2 shrink-0">
-            <div className="w-2 h-2 rounded-full bg-indigo-500" />
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-              Selection ({selectedIds.length})
-            </span>
-            <button type="button" className="p-1 hover:bg-slate-200 rounded-full text-slate-400">
-              <X size={12} />
-            </button>
-          </div>
-          <Divider />
-          <div className="flex flex-col shrink-0">
-            <span className="text-[8px] text-slate-400 uppercase font-bold">IDs</span>
-            <span className="text-[10px] font-mono font-bold text-indigo-600 truncate max-w-[300px]">
-              {selectedIds.join(', ')}
-            </span>
-          </div>
-        </div>
-      )}
+      {/* Selection ID bar removed as per request */}
     </div>
   );
 };

@@ -98,6 +98,8 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
 
   const [zoom, setZoom] = useState(fitScale);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const panStartRef = useRef<{ x: number, y: number, panX: number, panY: number } | null>(null);
   const [draggingConnectorId, setDraggingConnectorId] = useState<string | null>(null);
   const [isDraggingNewHandler, setIsDraggingNewHandler] = useState(false);
 
@@ -108,10 +110,12 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
     const el = outerRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
+    const paddingBottom = 60; 
+    const availableHeight = rect.height - paddingBottom;
     setZoom(fitScale);
     setPan({
       x: (rect.width - width * fitScale) / 2,
-      y: (rect.height - height * fitScale) / 2,
+      y: Math.max(0, (availableHeight - height * fitScale) / 2),
     });
   }, [fitScale, width, height]);
 
@@ -218,7 +222,7 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
 
   // Cache rendered connector geometry per connector ID, keyed by a hash of inputs.
   // This avoids recomputing all connectors when only one changes (e.g. during drag).
-  const connectorCacheRef = useRef<Record<string, { key: string; result: { id: string; pieceId: string; pathData: string; basePathData: string; color: string; point: { x: number; y: number }; normal: { x: number; y: number }; boundary: paper.PathItem } }>>({});
+  const connectorCacheRef = useRef<Record<string, { key: string; result: { id: string; pieceId: string; pathData: string; basePathData: string; color: string; widthPx: number; point: { x: number; y: number }; normal: { x: number; y: number }; boundary: paper.PathItem } }>>({});
 
   const renderedConnectors = useMemo(() => {
     const cache = connectorCacheRef.current;
@@ -265,6 +269,7 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
           pathData: result.pathData,
           basePathData: result.basePathData,
           color: piece.color,
+          widthPx: c.widthPx,
           point: { x: pt.x, y: pt.y },
           normal: { x: normal.x, y: normal.y },
           boundary: piece.boundary
@@ -311,7 +316,7 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
     if ('touches' in e) {
       clientX = e.touches[0].clientX;
       clientY = e.touches[0].clientY;
-      if (isDraggingNewHandler || draggingConnectorId) {
+      if (isDraggingNewHandler || draggingConnectorId || isPanning) {
         e.preventDefault();
       }
     } else {
@@ -320,6 +325,17 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
     }
 
     const boardPt = clientToBoard(clientX, clientY);
+    
+    if (isPanning && panStartRef.current) {
+      const dx = clientX - panStartRef.current.x;
+      const dy = clientY - panStartRef.current.y;
+      setPan({
+        x: panStartRef.current.panX + dx,
+        y: panStartRef.current.panY + dy
+      });
+      return;
+    }
+
     if (whimsyPlacementActive || stampPlacementActive || rectSelectMode) {
       setMousePos(boardPt);
     }
@@ -339,10 +355,27 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
   const handleMouseUp = useCallback(() => {
     setIsDraggingNewHandler(false);
     setDraggingConnectorId(null);
+    setIsPanning(false);
+    panStartRef.current = null;
   }, []);
 
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (whimsyPlacementActive || stampPlacementActive || rectSelectMode) return;
+    
+    // Start panning on middle click or left click on background
+    if (e.button === 1 || (e.button === 0 && e.target === e.currentTarget)) {
+      panStartRef.current = {
+        x: e.clientX,
+        y: e.clientY,
+        panX: pan.x,
+        panY: pan.y
+      };
+      setIsPanning(true);
+    }
+  };
+
   useEffect(() => {
-    if (isDraggingNewHandler || draggingConnectorId) {
+    if (isDraggingNewHandler || draggingConnectorId || isPanning) {
       window.addEventListener('mousemove', handleMouseMove as any);
       window.addEventListener('mouseup', handleMouseUp);
       window.addEventListener('touchmove', handleMouseMove as any, { passive: false });
@@ -354,7 +387,7 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
       window.removeEventListener('touchmove', handleMouseMove as any);
       window.removeEventListener('touchend', handleMouseUp);
     };
-  }, [isDraggingNewHandler, draggingConnectorId, handleMouseMove, handleMouseUp]);
+  }, [isDraggingNewHandler, draggingConnectorId, isPanning, handleMouseMove, handleMouseUp]);
 
   // Handle ESC key to cancel placements
   useEffect(() => {
@@ -376,9 +409,10 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
       className="flex-1 overflow-hidden relative bg-slate-100 select-none"
       onMouseMove={handleMouseMove}
       onTouchMove={handleMouseMove}
+      onMouseDown={handleMouseDown}
     >
       <div
-        className="absolute origin-top-left bg-white shadow-2xl rounded-sm overflow-hidden"
+        className="absolute top-0 left-0 origin-top-left bg-white shadow-2xl rounded-sm overflow-hidden"
         style={{
           width,
           height,
@@ -394,12 +428,26 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
         >
           <defs>
             <filter id="piece-selection-glow" x="-40%" y="-40%" width="180%" height="180%">
-              <feGaussianBlur in="SourceAlpha" stdDeviation="5" result="blur" />
-              <feFlood floodColor="#4338ca" floodOpacity="0.75" result="glowColor" />
+              <feGaussianBlur in="SourceAlpha" stdDeviation="8" result="blur" />
+              <feFlood floodColor="#4f46e5" floodOpacity="0.6" result="glowColor" />
               <feComposite in="glowColor" in2="blur" operator="in" result="softGlow" />
               <feMerge>
                 <feMergeNode in="softGlow" />
                 <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+            <filter id="piece-selection-inner-shadow">
+              <feComponentTransfer in="SourceAlpha">
+                <feFuncA type="table" tableValues="1 0" />
+              </feComponentTransfer>
+              <feGaussianBlur stdDeviation="3" />
+              <feOffset dx="0" dy="0" result="offsetblur" />
+              <feFlood floodColor="black" floodOpacity="0.5" result="color" />
+              <feComposite in2="offsetblur" operator="in" />
+              <feComposite in2="SourceAlpha" operator="in" />
+              <feMerge>
+                <feMergeNode in="SourceGraphic" />
+                <feMergeNode />
               </feMerge>
             </filter>
           </defs>
@@ -439,8 +487,8 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
                   d={piece.boundary.pathData}
                   fill={piece.color}
                   fillRule="evenodd"
-                  stroke={isSelected ? (activeTab === 'CONNECTION' ? '#10b981' : '#4f46e5') : isNeighbor ? '#fbbf24' : isHovered ? '#6366f1' : isGroupInstancePiece ? '#7c3aed' : '#000'}
-                  strokeWidth={isSelected ? 4 : isNeighbor ? 3 : isHovered ? 2 : isGroupInstancePiece ? 1.5 : 1}
+                  stroke={isSelected ? '#1e1b4b' : isNeighbor ? '#fbbf24' : isHovered ? '#6366f1' : isGroupInstancePiece ? '#7c3aed' : '#000'}
+                  strokeWidth={isSelected ? 5 : isNeighbor ? 3 : isHovered ? 2 : isGroupInstancePiece ? 1.5 : 1}
                   strokeLinejoin="round"
                   strokeLinecap="round"
                   filter={isSelected ? 'url(#piece-selection-glow)' : undefined}
@@ -473,16 +521,30 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
                   <>
                     <path
                       d={piece.boundary.pathData}
-                      fill="rgba(99, 102, 241, 0.18)"
+                      fill="rgba(30, 27, 75, 0.4)"
                       fillRule="evenodd"
                       className="pointer-events-none"
+                      filter="url(#piece-selection-inner-shadow)"
                     />
+                    {/* Blue dash */}
                     <path
                       d={piece.boundary.pathData}
                       fill="none"
-                      stroke="white"
-                      strokeWidth={2}
-                      strokeDasharray="5 3"
+                      stroke="#312e81"
+                      strokeWidth={3}
+                      strokeDasharray="8 8"
+                      fillRule="evenodd"
+                      strokeLinejoin="round"
+                      className="pointer-events-none"
+                    />
+                    {/* Purple dash (offset) */}
+                    <path
+                      d={piece.boundary.pathData}
+                      fill="none"
+                      stroke="#581c87"
+                      strokeWidth={3}
+                      strokeDasharray="8 8"
+                      strokeDashoffset={8}
                       fillRule="evenodd"
                       strokeLinejoin="round"
                       className="pointer-events-none"
@@ -549,13 +611,13 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
                     <circle
                       cx={c!.point.x}
                       cy={c!.point.y}
-                      r={10}
+                      r={c!.widthPx / 2}
                       fill="transparent"
                     />
                     <circle
                       cx={c!.point.x}
                       cy={c!.point.y}
-                      r={isSelected ? 6 : 4}
+                      r={isSelected ? c!.widthPx / 4 + 2 : c!.widthPx / 4}
                       fill={isSelected ? '#10b981' : '#64748b'}
                       stroke="white"
                       strokeWidth={2}
@@ -611,14 +673,14 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
               <circle
                 cx={connectionData.point.x}
                 cy={connectionData.point.y}
-                r={10}
+                r={connectorWidthPx / 2}
                 fill="transparent"
                 className="pointer-events-all"
               />
               <circle
                 cx={connectionData.point.x}
                 cy={connectionData.point.y}
-                r={6}
+                r={connectorWidthPx / 4}
                 fill="#10b981"
                 stroke="white"
                 strokeWidth={2}
@@ -744,7 +806,7 @@ export const V3Canvas: React.FC<V3CanvasProps> = ({
         </svg>
       </div>
 
-      <div className="absolute bottom-4 left-4 flex items-center gap-2 bg-white rounded-xl shadow-md px-3 py-2 z-10">
+      <div className="absolute bottom-6 left-6 flex items-center gap-2 bg-white rounded-xl shadow-lg px-3 py-2 z-10 border border-slate-100">
         <button
           onClick={(e) => { e.stopPropagation(); applyZoom(zoom / 1.25); }}
           className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors"

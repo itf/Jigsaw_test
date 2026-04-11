@@ -320,7 +320,8 @@ export function applyInstanceTransform(
  */
 export function subtractStampsFromPieces(
   piecePaths: Record<string, paper.PathItem>,
-  areas: Record<string, Area>
+  areas: Record<string, Area>,
+  flattenTolerance?: number
 ): Record<string, paper.PathItem> {
   const stampPieceIds = new Set<string>();
   const stampBoundaries: paper.PathItem[] = [];
@@ -354,6 +355,9 @@ export function subtractStampsFromPieces(
       insert: false
     });
     const transformed = applyInstanceTransform(templateBoundary, area.stampSource.transform);
+    if (flattenTolerance !== undefined) {
+      transformed.flatten(flattenTolerance);
+    }
     templateBoundary.remove();
     stampBoundaries.push(transformed);
   }
