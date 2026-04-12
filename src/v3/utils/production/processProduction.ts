@@ -30,6 +30,7 @@ export interface ProcessProductionOptions {
 export function processProductionState(puzzleState: PuzzleState, options: ProcessProductionOptions = {}): ProductionArea[] {
   const { flattenCurves = true, flattenTolerance = 0.5, useLegacyMerge = false } = options;
   const { areas, connectors, width, height } = puzzleState;
+  const ps = puzzleState as any;
 
   // Initialize a temporary Paper.js project for processing
   const canvas = document.createElement('canvas');
@@ -41,27 +42,46 @@ export function processProductionState(puzzleState: PuzzleState, options: Proces
   const pieceColors: Record<string, string> = {};
   const originalPiecePaths: Record<string, paper.PathItem> = {};
 
-  /* 
-     TODO: Data Scaling Implementation
-     Before performing boolean operations, we should upscale all paths and coordinates 
-     (e.g., by a factor of 2.5 to reach a 2000x2000 coordinate space).
-     This increases numerical precision for Paper.js boolean operations, 
-     reducing errors like "Zero-length paths" or missing intersections.
-     After processing, we can either scale back down for display or keep the 
-     upscaled version for high-resolution SVG export.
-  */
+  if (ps.useGraphMode) {
+    Object.values(ps.faces || {}).forEach((face: any) => {
+      const boundary = new paper.Path();
+      (face.edges || []).forEach((eInfo: any) => {
+        const edge = ps.edges[eInfo.id];
+        if (edge) {
+          const temp = new paper.Path(edge.pathData);
+          if (eInfo.reversed) temp.reverse();
+          boundary.addSegments(temp.segments);
+          temp.remove();
+        }
+      });
+      boundary.closed = true;
+      piecePaths[face.id] = boundary;
+      pieceColors[face.id] = face.color;
+      originalPiecePaths[face.id] = boundary.clone({ insert: false });
+    });
+    
+    // Also include whimsies in graph mode
+    Object.values(areas).forEach(area => {
+      if (area.id.startsWith('whimsy-')) {
+        const path = area.boundary.clone({ insert: false });
+        piecePaths[area.id] = path;
+        pieceColors[area.id] = area.color;
+        originalPiecePaths[area.id] = path.clone({ insert: false });
+      }
+    });
+  } else {
+    Object.values(areas).forEach(area => {
+      if (area.type === AreaType.PIECE || (area.type === AreaType.STAMP && area.children.length === 0)) {
+        // Clone the existing boundary directly to preserve CompoundPath structure and holes
+        const path = area.boundary.clone({ insert: false });
+        piecePaths[area.id] = path;
+        pieceColors[area.id] = area.color;
 
-  Object.values(areas).forEach(area => {
-    if (area.type === AreaType.PIECE || (area.type === AreaType.STAMP && area.children.length === 0)) {
-      // Clone the existing boundary directly to preserve CompoundPath structure and holes
-      const path = area.boundary.clone({ insert: false });
-      piecePaths[area.id] = path;
-      pieceColors[area.id] = area.color;
-
-      // Keep a copy of the original for pre-calculating connectors
-      originalPiecePaths[area.id] = path.clone({ insert: false });
-    }
-  });
+        // Keep a copy of the original for pre-calculating connectors
+        originalPiecePaths[area.id] = path.clone({ insert: false });
+      }
+    });
+  }
 
   // 1b. Flatten curves to straight segments for more reliable boolean ops
   if (flattenCurves) {
@@ -74,7 +94,13 @@ export function processProductionState(puzzleState: PuzzleState, options: Proces
   // 1c. Subtract STAMP instance boundaries from overlapping non-stamp pieces
   subtractStampsFromPieces(piecePaths, areas, flattenCurves ? flattenTolerance : undefined);
 
-  const pieceIds = Object.keys(piecePaths);
+  const pieceIds = Object.keys(piecePaths).sort((a, b) => {
+    const aIsWhimsy = a.startsWith('whimsy-');
+    const bIsWhimsy = b.startsWith('whimsy-');
+    if (aIsWhimsy && !bIsWhimsy) return -1;
+    if (!aIsWhimsy && bIsWhimsy) return 1;
+    return 0;
+  });
   const allConnectors = Object.values(connectors).filter(c => !c.disabled);
 
   // Sequential piece-by-piece processing:

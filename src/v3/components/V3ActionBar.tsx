@@ -108,6 +108,10 @@ interface V3ActionBarProps {
   onPlaceStamp: (sourceGroupId: string) => void;
   onDeleteStampSource: (sourceGroupId: string, mode: 'delete' | 'convert') => void;
   onRefreshStamps: () => void;
+  // V5 Graph props
+  useGraphMode?: boolean;
+  onDeleteEdge?: (id: string) => void;
+  onSplitFace?: (faceId: string, direction: 'HORIZONTAL' | 'VERTICAL') => void;
 }
 
 const Label: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -223,6 +227,9 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
   onPlaceStamp,
   onDeleteStampSource,
   onRefreshStamps,
+  useGraphMode,
+  onDeleteEdge,
+  onSplitFace,
 }) => {
   const [showWhimsyLibrary, setShowWhimsyLibrary] = useState(false);
   const [libraryMode, setLibraryMode] = useState<'WHIMSY' | 'CONNECTOR'>('WHIMSY');
@@ -464,6 +471,36 @@ export const V3ActionBar: React.FC<V3ActionBarProps> = ({
                 <Merge className="w-3 h-3" />
                 Merge
               </button>
+
+              {useGraphMode && selectedIds.length === 1 && selectedIds[0].startsWith('edge-') && (
+                <button
+                  type="button"
+                  onClick={() => onDeleteEdge?.(selectedIds[0])}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-rose-600 text-white text-[10px] font-bold uppercase hover:bg-rose-500"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  Delete Edge
+                </button>
+              )}
+
+              {useGraphMode && selectedIds.length === 1 && selectedIds[0].startsWith('face-') && (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onSplitFace?.(selectedIds[0], 'HORIZONTAL')}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white text-[10px] font-bold uppercase hover:bg-indigo-500"
+                  >
+                    Split H
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onSplitFace?.(selectedIds[0], 'VERTICAL')}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white text-[10px] font-bold uppercase hover:bg-indigo-500"
+                  >
+                    Split V
+                  </button>
+                </div>
+              )}
             </div>
           </>
         )}
