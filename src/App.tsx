@@ -4,11 +4,12 @@ import V2App from './v2/App.tsx';
 import V3App from './v3/App.tsx';
 import V5App from './v5/App.tsx';
 import V3DebugPage from './v3/components/V3DebugPage.tsx';
+import V5DebugPage from './v5/components/V5DebugPage.tsx';
 import { motion, AnimatePresence } from 'motion/react';
 import { Scissors, Layers, Zap, ChevronRight, Info, Sparkles, Bug } from 'lucide-react';
 
 export default function App() {
-  const [version, setVersion] = useState<'HOME' | 'V1' | 'V2' | 'V3' | 'V5' | 'V3_DEBUG'>('HOME');
+  const [version, setVersion] = useState<'HOME' | 'V1' | 'V2' | 'V3' | 'V5' | 'V3_DEBUG' | 'V5_DEBUG'>('HOME');
 
   if (version === 'V1') {
     return (
@@ -72,6 +73,10 @@ export default function App() {
 
   if (version === 'V3_DEBUG') {
     return <V3DebugPage onBack={() => setVersion('V3')} />;
+  }
+
+  if (version === 'V5_DEBUG') {
+    return <V5DebugPage onBack={() => setVersion('V5')} />;
   }
 
   return (
@@ -192,7 +197,14 @@ export default function App() {
               className="flex items-center gap-1.5 text-slate-400 hover:text-indigo-600 transition-colors font-medium"
             >
               <Bug className="w-4 h-4" />
-              Debugging
+              V3 Debug
+            </button>
+            <button 
+              onClick={() => setVersion('V5_DEBUG')}
+              className="flex items-center gap-1.5 text-slate-400 hover:text-purple-600 transition-colors font-medium"
+            >
+              <Bug className="w-4 h-4" />
+              V5 Debug
             </button>
           </div>
           <p>© 2026 Jigsaw Studio. All rights reserved.</p>

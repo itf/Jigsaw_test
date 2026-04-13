@@ -1,31 +1,22 @@
-import paper from 'paper';
-import { StampSource } from '../v3/types/groupTemplateTypes';
-
 export type Point = { x: number; y: number };
 
-export enum AreaType {
-  GROUP = 'GROUP',
-  PIECE = 'PIECE',
-  STAMP = 'STAMP'
-}
-
-/**
- * V5 Graph-based structures
- */
+// ---------------------------------------------------------------------------
+// Graph primitives
+// ---------------------------------------------------------------------------
 
 export interface Node {
   id: string;
   point: Point;
-  incidentEdges: string[]; // IDs of edges connected to this node
+  incidentEdges: string[];
 }
 
 export interface Edge {
   id: string;
   fromNode: string;
   toNode: string;
-  pathData: string; // SVG path data for the edge geometry
-  leftFace: string; // ID of the piece to the left
-  rightFace: string; // ID of the piece to the right
+  path: paper.Path; // Live paper.js path
+  leftFace: string;
+  rightFace: string;
 }
 
 export interface FaceEdge {
@@ -35,42 +26,57 @@ export interface FaceEdge {
 
 export interface Face {
   id: string;
-  edges: FaceEdge[]; // Ordered list of edges with orientation forming the boundary
+  edges: FaceEdge[];
   color: string;
   groupMemberships: string[];
   seedPoint?: Point;
 }
 
-export interface Area {
+// ---------------------------------------------------------------------------
+// Whimsies
+// ---------------------------------------------------------------------------
+
+/** A whimsy that has been placed on the canvas but not yet merged into the graph. */
+export interface FloatingWhimsy {
   id: string;
-  groupMemberships: string[];
-  type: AreaType;
-  children: string[]; 
-  boundary: paper.PathItem; 
-  color: string;
-  seedPoint?: Point;
-
-  // --- STAMP areas only ---
-  stampSource?: StampSource;
-
-  // --- Stamp-source GROUP areas only ---
-  stampName?: string;
-  includeNonAdjacentConnectors?: boolean;
-  cachedBoundaryPathData?: string;
-  cachedBounds?: { x: number; y: number; width: number; height: number };
+  templateId: string;
+  svgData: string;     // raw SVG path data from whimsyGallery (normalized, not transformed)
+  center: Point;
+  scale: number;
+  rotationDeg: number;
 }
+
+// ---------------------------------------------------------------------------
+// Connectors
+// ---------------------------------------------------------------------------
 
 export enum NeckShape {
   STANDARD = 'STANDARD',
   TAPERED = 'TAPERED',
-  CURVED = 'CURVED'
+  CURVED = 'CURVED',
 }
 
-export interface Connector {
+export interface ConnectorV5 {
   id: string;
-  pieceId: string;
-  pathIndex: number;
+
+  /** Edge the user clicked to place the connector midpoint. */
+  midEdgeId: string;
+  /** [0,1] position along midEdge where user clicked. */
   midT: number;
+  /**
+   * 'out' → connector protrudes into edge.rightFace  (source face = edge.leftFace)
+   * 'in'  → connector protrudes into edge.leftFace   (source face = edge.rightFace)
+   * The source faceId is NEVER stored; always derived at runtime from edge + direction.
+   */
+  direction: 'in' | 'out';
+
+  // Computed at placement time; auto-remapped when edges are split:
+  p1: { edgeId: string; t: number };
+  p2: { edgeId: string; t: number };
+  /** Edge-refs from p1→p2 along the source face boundary. Deleted at bake time. */
+  replacedSegment: Array<{ edgeId: string; reversed: boolean }>;
+
+  // Shape parameters (same as V3 Connector):
   widthPx: number;
   extrusion: number;
   headTemplateId: string;
@@ -85,37 +91,30 @@ export interface Connector {
   extrusionCurvature?: number;
 }
 
-export interface Whimsy {
+// ---------------------------------------------------------------------------
+// Puzzle state
+// ---------------------------------------------------------------------------
+
+export interface PuzzleState {
+  nodes: Record<string, Node>;
+  edges: Record<string, Edge>;
+  faces: Record<string, Face>;
+  /** Whimsies placed on the canvas but not yet merged into the graph. */
+  floatingWhimsies: FloatingWhimsy[];
+  connectors: Record<string, ConnectorV5>;
+  /** ID of the root (outer boundary) face. '' when no puzzle is loaded. */
+  rootFaceId: string;
+  width: number;
+  height: number;
+}
+
+// ---------------------------------------------------------------------------
+// Whimsy library entry (for the gallery picker — not the same as FloatingWhimsy)
+// ---------------------------------------------------------------------------
+
+export interface WhimsyLibraryEntry {
   id: string;
   name: string;
   svgData: string;
   category?: string;
-}
-
-export interface PuzzleState {
-  areas: Record<string, Area>;
-  connectors: Record<string, Connector>;
-  whimsies: Whimsy[];
-  rootAreaId: string;
-  width: number;
-  height: number;
-  
-  // V5 Graph State
-  nodes: Record<string, Node>;
-  edges: Record<string, Edge>;
-  faces: Record<string, Face>;
-  useGraphMode: boolean;
-}
-
-export type OperationType =
-  | 'CREATE_ROOT'
-  | 'SUBDIVIDE_GRID'
-  | 'MERGE_PIECES'
-  | 'ADD_WHIMSY';
-
-export interface Operation {
-  id: string;
-  type: OperationType;
-  params: any;
-  timestamp: number;
 }
